@@ -125,6 +125,21 @@ class Settings:
         """Se deve ignorar datas já cadastradas."""
         return self._config.get("automacao", {}).get("ignorar_datas_existentes", True)
     
+    @property
+    def usar_chrome_sistema(self) -> bool:
+        """Se deve usar o Chrome instalado no sistema (ajuda a passar no captcha)."""
+        return self._config.get("automacao", {}).get("usar_chrome_sistema", True)
+    
+    @property
+    def chrome_path(self) -> str:
+        """Caminho do executável do Chrome."""
+        return self._config.get("automacao", {}).get("chrome_path", "")
+    
+    @property
+    def usar_perfil_chrome(self) -> bool:
+        """Se deve usar o perfil padrão do Chrome do usuário."""
+        return self._config.get("automacao", {}).get("usar_perfil_chrome", False)
+    
     # Propriedades de log
     @property
     def log_nivel(self) -> str:

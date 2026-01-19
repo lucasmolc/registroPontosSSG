@@ -244,6 +244,34 @@ class ValidadorHorarios:
         
         return horario_atual, ajustes
     
+    def _calcular_minutos_trabalhados(self, entrada: str, saida_almoco: str, 
+                                        retorno_almoco: str, saida: str) -> int:
+        """
+        Calcula o total de minutos trabalhados no dia.
+        
+        Args:
+            entrada: Horário de entrada.
+            saida_almoco: Horário de saída para almoço.
+            retorno_almoco: Horário de retorno do almoço.
+            saida: Horário de saída.
+            
+        Returns:
+            Total de minutos trabalhados.
+        """
+        try:
+            def horario_para_minutos(h: str) -> int:
+                partes = h.split(":")
+                return int(partes[0]) * 60 + int(partes[1])
+            
+            # Período da manhã
+            manha = horario_para_minutos(saida_almoco) - horario_para_minutos(entrada)
+            # Período da tarde
+            tarde = horario_para_minutos(saida) - horario_para_minutos(retorno_almoco)
+            
+            return manha + tarde
+        except (ValueError, IndexError):
+            return 0
+    
     def ajustar_registro(self, data: str, entrada: str, saida_almoco: str, 
                          retorno_almoco: str, saida: str) -> RegistroAjustado:
         """
@@ -251,6 +279,10 @@ class ValidadorHorarios:
         
         Aplica +1min para horários redondos e duplicados, verificando
         recursivamente se o ajuste gerou novos conflitos.
+        
+        IMPORTANTE: O total de horas trabalhadas é mantido igual ao original.
+        Se entrada ou retorno forem adiantados (+1min), a saída correspondente
+        será compensada (+1min) para manter o mesmo total.
         
         Args:
             data: Data do registro.
@@ -264,6 +296,15 @@ class ValidadorHorarios:
         """
         ajustes = []
         horarios_usados = []  # Horários já usados neste registro
+        
+        # Calcula total de minutos trabalhados ORIGINAL (antes de qualquer ajuste)
+        minutos_originais = self._calcular_minutos_trabalhados(entrada, saida_almoco, retorno_almoco, saida)
+        
+        # Guarda horários originais para calcular compensação
+        entrada_original = entrada
+        saida_almoco_original = saida_almoco
+        retorno_almoco_original = retorno_almoco
+        saida_original = saida
         
         # 1. Ajusta entrada
         entrada, ajustes_entrada = self._ajustar_horario_completo(data, entrada, horarios_usados, "Entrada")
@@ -286,10 +327,49 @@ class ValidadorHorarios:
         ajustes.extend(ajustes_retorno)
         horarios_usados.append(retorno_almoco)
         
-        # 4. Ajusta saída
+        # 4. Calcula compensação necessária para manter total de horas
+        # Calcula minutos trabalhados com os ajustes feitos (sem ajustar saída ainda)
+        minutos_atuais = self._calcular_minutos_trabalhados(entrada, saida_almoco, retorno_almoco, saida_original)
+        
+        # Diferença = quanto precisa compensar na saída
+        diferenca_minutos = minutos_originais - minutos_atuais
+        
+        # Ajusta saída para compensar a diferença
+        if diferenca_minutos != 0:
+            saida = self._adicionar_minutos(saida_original, diferenca_minutos)
+            if diferenca_minutos > 0:
+                ajustes.append(f"Saída: {saida_original} → {saida} (compensação +{diferenca_minutos}min)")
+            else:
+                ajustes.append(f"Saída: {saida_original} → {saida} (compensação {diferenca_minutos}min)")
+        
+        # 5. Ajusta saída por redondo/duplicado (e compensa se necessário)
+        saida_antes_ajuste = saida
         saida, ajustes_saida = self._ajustar_horario_completo(data, saida, horarios_usados, "Saída")
         ajustes.extend(ajustes_saida)
         horarios_usados.append(saida)
+        
+        # Se saída foi ajustada por redondo/duplicado, compensa no retorno do almoço
+        if saida != saida_antes_ajuste:
+            # Calcula quantos minutos a saída avançou
+            minutos_avancados_saida = self._diferenca_minutos(saida_antes_ajuste, saida)
+            
+            if minutos_avancados_saida > 0:
+                # Tenta compensar atrasando o retorno do almoço (aumentando almoço)
+                # Mas precisa verificar se não gera duplicado
+                retorno_compensado = self._adicionar_minutos(retorno_almoco, minutos_avancados_saida)
+                
+                # Verifica se o retorno compensado não gera conflito
+                if not self._is_horario_duplicado(data, retorno_compensado) and retorno_compensado not in horarios_usados[:-1]:
+                    # Remove retorno antigo e adiciona novo
+                    horarios_usados.remove(retorno_almoco)
+                    retorno_almoco = retorno_compensado
+                    horarios_usados.insert(2, retorno_almoco)  # Insere na posição correta
+                    ajustes.append(f"Retorno almoço: ajustado para {retorno_almoco} (compensação saída)")
+        
+        # Verifica se o total final está correto
+        minutos_finais = self._calcular_minutos_trabalhados(entrada, saida_almoco, retorno_almoco, saida)
+        if minutos_finais != minutos_originais:
+            logger.warning(f"Atenção: horas trabalhadas alteradas de {minutos_originais}min para {minutos_finais}min")
         
         return RegistroAjustado(
             data=data,
@@ -299,3 +379,12 @@ class ValidadorHorarios:
             saida=saida,
             ajustes_realizados=ajustes
         )
+    
+    def _diferenca_minutos(self, horario1: str, horario2: str) -> int:
+        """Calcula a diferença em minutos entre dois horários (horario2 - horario1)."""
+        try:
+            h1 = datetime.strptime(horario1, "%H:%M")
+            h2 = datetime.strptime(horario2, "%H:%M")
+            return int((h2 - h1).total_seconds() / 60)
+        except ValueError:
+            return 0

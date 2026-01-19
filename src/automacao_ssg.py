@@ -8,10 +8,62 @@ from playwright_stealth import Stealth
 from loguru import logger
 import shutil
 import os
+import subprocess
+import time
+import socket
 
 from config import Settings
 from src.leitor_pontos import RegistroPonto
 from src.validador_horarios import ValidadorHorarios, RegrasValidacao
+
+
+def encontrar_porta_livre() -> int:
+    """Encontra uma porta TCP livre para o debugging."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
+def encontrar_chrome() -> str:
+    """Encontra o caminho do Chrome instalado no sistema."""
+    caminhos_possiveis = [
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    
+    for caminho in caminhos_possiveis:
+        if os.path.exists(caminho):
+            return caminho
+    
+    return ""
+
+
+def formatar_horario(horario: str) -> str:
+    """
+    Formata um horário garantindo formato HH:MM com 2 dígitos.
+    
+    Args:
+        horario: Horário no formato H:MM ou HH:MM
+        
+    Returns:
+        Horário formatado como HH:MM (ex: 08:00)
+    """
+    if not horario:
+        return horario
+    
+    try:
+        partes = horario.split(":")
+        if len(partes) == 2:
+            hora = int(partes[0])
+            minuto = int(partes[1])
+            return f"{hora:02d}:{minuto:02d}"
+    except (ValueError, IndexError):
+        pass
+    
+    return horario
 
 
 class AutomacaoSSG:
@@ -45,6 +97,89 @@ class AutomacaoSSG:
         logger.info("Iniciando navegador...")
         
         self.playwright = sync_playwright().start()
+        
+        # Verifica se deve usar o Chrome do sistema
+        if self.settings.usar_chrome_sistema:
+            self._iniciar_chrome_sistema()
+        else:
+            self._iniciar_chromium_embutido()
+    
+    def _iniciar_chrome_sistema(self) -> None:
+        """Inicia o Chrome instalado no sistema via CDP (Chrome DevTools Protocol)."""
+        logger.info("Usando Chrome instalado no sistema...")
+        
+        # Encontra o Chrome
+        chrome_path = self.settings.chrome_path or encontrar_chrome()
+        if not chrome_path or not os.path.exists(chrome_path):
+            logger.warning("Chrome não encontrado, usando Chromium embutido")
+            self._iniciar_chromium_embutido()
+            return
+        
+        logger.info(f"Chrome encontrado: {chrome_path}")
+        
+        # Diretório de dados do navegador
+        if self.settings.usar_perfil_chrome:
+            # Usa o perfil padrão do usuário (com cookies e sessões existentes)
+            user_data_dir = os.path.expandvars(r"%LocalAppData%\Google\Chrome\User Data")
+        else:
+            # Usa diretório separado para o sistema
+            user_data_dir = str(self.settings.base_dir / "browser_data")
+            os.makedirs(user_data_dir, exist_ok=True)
+        
+        # Encontra porta livre para debugging
+        porta_debug = encontrar_porta_livre()
+        
+        # Argumentos do Chrome
+        args = [
+            chrome_path,
+            f"--remote-debugging-port={porta_debug}",
+            f"--user-data-dir={user_data_dir}",
+            "--disable-background-networking",
+            "--disable-client-side-phishing-detection",
+            "--disable-default-apps",
+            "--disable-hang-monitor",
+            "--disable-popup-blocking",
+            "--disable-prompt-on-repost",
+            "--disable-sync",
+            "--disable-translate",
+            "--metrics-recording-only",
+            "--no-first-run",
+            "--safebrowsing-disable-auto-update",
+        ]
+        
+        if not self.settings.usar_perfil_chrome:
+            args.append("--profile-directory=Default")
+        
+        # Inicia o Chrome
+        logger.info(f"Iniciando Chrome na porta {porta_debug}...")
+        self._chrome_process = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Aguarda o Chrome iniciar
+        time.sleep(3)
+        
+        # Conecta via CDP
+        try:
+            self.browser = self.playwright.chromium.connect_over_cdp(
+                f"http://localhost:{porta_debug}"
+            )
+            self.context = self.browser.contexts[0] if self.browser.contexts else self.browser.new_context()
+            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            self.page.set_default_timeout(self.settings.timeout)
+            
+            logger.info("Conectado ao Chrome do sistema com sucesso")
+            
+        except Exception as e:
+            logger.error(f"Erro ao conectar ao Chrome: {e}")
+            self._chrome_process.terminate()
+            self._iniciar_chromium_embutido()
+    
+    def _iniciar_chromium_embutido(self) -> None:
+        """Inicia o Chromium embutido do Playwright com stealth."""
+        logger.info("Usando Chromium embutido do Playwright...")
         
         # Usa diretório de dados persistente para manter cookies/sessão
         user_data_dir = self.settings.base_dir / "browser_data"
@@ -83,9 +218,24 @@ class AutomacaoSSG:
         logger.info("Encerrando navegador...")
         
         if self.context:
-            self.context.close()
+            try:
+                self.context.close()
+            except:
+                pass
+        if self.browser:
+            try:
+                self.browser.close()
+            except:
+                pass
         if self.playwright:
             self.playwright.stop()
+        
+        # Encerra processo do Chrome se estiver usando sistema
+        if hasattr(self, '_chrome_process') and self._chrome_process:
+            try:
+                self._chrome_process.terminate()
+            except:
+                pass
         
         logger.info("Navegador encerrado")
     
@@ -111,16 +261,10 @@ class AutomacaoSSG:
             # 1. Acessa a página principal do SSG
             url_ssg = "https://ssg.sysmap.com.br/"
             logger.info(f"Acessando {url_ssg}")
-            print(f"   Acessando {url_ssg}")
             self.page.goto(url_ssg)
             
             # 2. Aguarda verificação de segurança (Cloudflare)
-            print("\n" + "=" * 50)
-            print("  ⏳ VERIFICAÇÃO DE SEGURANÇA")
-            print("=" * 50)
-            print("  Aguardando verificação automática...")
-            print("  (Pode levar alguns segundos)")
-            print("=" * 50)
+            print("   ⏳ Verificação Cloudflare...")
             
             logger.info("Aguardando verificação de segurança (Cloudflare)...")
             
@@ -131,53 +275,48 @@ class AutomacaoSSG:
                 timeout=120000  # 2 minutos para verificação
             )
             
-            print("  ✅ Verificação concluída!")
-            print("=" * 50 + "\n")
-            
             # 3. Aguarda a página de login carregar
             self.page.wait_for_load_state("networkidle")
             logger.info(f"Página de login carregada: {self.page.url}")
             
             # 4. Preenche credenciais
-            print("   Preenchendo credenciais...")
             logger.info("Preenchendo credenciais...")
             
             # Aguarda o campo de usuário estar visível
             self.page.wait_for_selector(
-                'input[name="log"], input[id="user_login"], input[name="username"]',
+                '#user_login',
                 state="visible",
                 timeout=30000
             )
             
-            # Preenche usuário (WordPress usa 'log' como nome do campo)
-            campo_usuario = self.page.locator(
-                'input[name="log"], input[id="user_login"], input[name="username"]'
-            ).first
+            # Preenche usuário
+            campo_usuario = self.page.locator('#user_login')
             campo_usuario.fill(self.settings.username)
             
-            # Preenche senha (WordPress usa 'pwd' como nome do campo)
-            campo_senha = self.page.locator(
-                'input[name="pwd"], input[id="user_pass"], input[type="password"]'
-            ).first
+            # Preenche senha
+            campo_senha = self.page.locator('#user_pass')
             campo_senha.fill(self.settings.password)
             
             logger.info("Credenciais preenchidas")
-            print("   ✅ Credenciais preenchidas!")
             
-            # 5. Clica no botão de login
-            botao_login = self.page.locator(
-                'input[type="submit"], button[type="submit"], input[name="wp-submit"]'
-            ).first
-            botao_login.click()
+            # 5. Coloca o foco no campo de 2FA para preenchimento manual
+            print("   🔐 Digite o código 2FA no navegador...")
+            
+            # Aguarda o campo de 2FA aparecer e coloca o foco nele
+            try:
+                self.page.wait_for_selector('#googleotp', state="visible", timeout=10000)
+                campo_2fa = self.page.locator('#googleotp')
+                campo_2fa.focus()
+                logger.info("Foco no campo 2FA")
+            except Exception as e:
+                logger.warning(f"Campo 2FA não encontrado: {e}")
+                # Se não encontrar o campo 2FA, clica no botão de login
+                botao_login = self.page.locator(
+                    'input[type="submit"], button[type="submit"], input[name="wp-submit"]'
+                ).first
+                botao_login.click()
             
             # 6. Aguarda usuário completar validação (2FA)
-            print("\n" + "=" * 50)
-            print("  🔐 AGUARDANDO VALIDAÇÃO")
-            print("=" * 50)
-            print("  Complete o login no navegador.")
-            print("  (Insira o código 2FA se solicitado)")
-            print("=" * 50)
-            
             logger.info("Aguardando usuário completar validação...")
             
             # Aguarda até que o login seja finalizado (URL muda para portal principal)
@@ -187,12 +326,8 @@ class AutomacaoSSG:
                 timeout=300000  # 5 minutos para completar login
             )
             
-            print("  ✅ Login concluído!")
-            print("=" * 50 + "\n")
-            
             # 7. Navega para a página de timesheet
             logger.info(f"Navegando para timesheet: {self.settings.timesheet_url}")
-            print(f"   Navegando para timesheet...")
             self.page.goto(self.settings.timesheet_url)
             self.page.wait_for_load_state("networkidle")
             
@@ -216,20 +351,25 @@ class AutomacaoSSG:
         logger.info("Selecionando mês atual e filtrando...")
         
         try:
-            # TODO: Ajustar seletores conforme a página real do SSG
-            # Exemplo genérico para seleção de mês:
+            # Aguarda página carregar
+            self.page.wait_for_load_state("networkidle")
             
-            # Opção 1: Select dropdown
-            # mes_atual = datetime.now().month
-            # self.page.select_option('select[name="mes"]', str(mes_atual))
+            # 1. Clica no dropdown de período
+            dropdown_periodo = self.page.locator('xpath=/html/body/div[3]/div[2]/div[2]/div[3]/div/div/div/a[2]')
+            dropdown_periodo.wait_for(state="visible", timeout=10000)
+            dropdown_periodo.click()
             
-            # Opção 2: Radio button ou checkbox para "Mês Atual"
-            # self.page.click('input[value="mes_atual"]')
-            # self.page.click('label:has-text("Mês Atual")')
+            # 2. Seleciona a opção "Mês Atual"
+            opcao_mes_atual = self.page.locator('xpath=/html/body/div[3]/div[2]/div[2]/div[3]/div/div/div/ul/li[1]/a')
+            opcao_mes_atual.wait_for(state="visible", timeout=5000)
+            opcao_mes_atual.click()
             
-            # Clica no botão de filtrar
-            # self.page.click('button:has-text("Filtrar"), input[value="Filtrar"]')
+            # 3. Clica no botão Pesquisar
+            botao_pesquisar = self.page.locator('#ButtonSearch')
+            botao_pesquisar.wait_for(state="visible", timeout=5000)
+            botao_pesquisar.click()
             
+            # Aguarda resultados carregarem
             self.page.wait_for_load_state("networkidle")
             
             logger.info("Mês atual selecionado e filtrado")
@@ -251,23 +391,24 @@ class AutomacaoSSG:
         try:
             datas = set()
             
-            # TODO: Ajustar seletores conforme a página real do SSG
-            # Exemplo: buscar todas as linhas da tabela de timesheet
+            # Aguarda a tabela carregar
+            self.page.wait_for_selector('#TableTimesheet', state="visible", timeout=10000)
             
-            # Opção 1: Tabela com datas
-            # linhas = self.page.locator('table.timesheet tbody tr').all()
-            # for linha in linhas:
-            #     data_cell = linha.locator('td:first-child').text_content()
-            #     if data_cell:
-            #         datas.add(data_cell.strip())
+            # Busca as datas nos inputs com classe activity-timesheet que têm atributo date
+            # A data está no atributo "date" dos inputs de apontamento
+            inputs_activity = self.page.locator('#TableTimesheet input.activity-timesheet[date]').all()
             
-            # Opção 2: Divs ou outros elementos
-            # elementos_data = self.page.locator('.registro-data').all()
-            # for elem in elementos_data:
-            #     datas.add(elem.text_content().strip())
+            for inp in inputs_activity:
+                try:
+                    data = inp.get_attribute('date')
+                    if data and '/' in data:
+                        datas.add(data.strip())
+                except Exception as e:
+                    logger.debug(f"Erro ao ler input: {e}")
+                    continue
             
             self.datas_cadastradas = datas
-            logger.info(f"Encontradas {len(datas)} datas já cadastradas")
+            logger.info(f"Encontradas {len(datas)} datas já cadastradas: {datas}")
             
             return datas
             
@@ -333,14 +474,13 @@ class AutomacaoSSG:
         logger.info("Clicando no botão de adicionar registro...")
         
         try:
-            # TODO: Ajustar seletor conforme a página real do SSG
-            # Exemplos de possíveis seletores:
-            # self.page.click('button:has-text("Adicionar")')
-            # self.page.click('a.btn-adicionar')
-            # self.page.click('input[value="Novo Registro"]')
-            # self.page.click('#btnAdicionar')
+            # Clica no botão de adicionar novo registro (ícone +)
+            botao_adicionar = self.page.locator('xpath=/html/body/div[3]/div[3]/div[1]/h3/span/i[2]')
+            botao_adicionar.wait_for(state="visible", timeout=5000)
+            botao_adicionar.click()
             
-            self.page.wait_for_load_state("networkidle")
+            # Aguarda a nova linha ser adicionada
+            self.page.wait_for_timeout(500)
             
             logger.info("Botão de adicionar registro clicado")
             return True
@@ -348,6 +488,18 @@ class AutomacaoSSG:
         except Exception as e:
             logger.error(f"Erro ao clicar em adicionar registro: {e}")
             return False
+    
+    def obter_ultima_linha_tabela(self) -> int:
+        """
+        Obtém o índice da última linha da tabela (linha recém adicionada).
+        
+        Returns:
+            Índice da última linha visível.
+        """
+        # Conta linhas dinâmicas visíveis (excluindo template)
+        linhas = self.page.locator('#TableTimesheet tbody tr.dynamic[style*="display: table-row"]').count()
+        # A linha recém adicionada está no índice: template(1) + linhas existentes + 1
+        return linhas + 1
     
     def registrar_ponto(self, registro: RegistroPonto) -> Tuple[bool, List[str]]:
         """
@@ -382,39 +534,140 @@ class AutomacaoSSG:
                 logger.info(f"  ↳ {ajuste}")
         
         try:
-            # Clica no botão de adicionar registro
+            # 1. Clica no botão de adicionar novo registro
             if not self.clicar_adicionar_registro():
                 return False, []
             
-            # TODO: Implementar a lógica de preenchimento conforme a página real do SSG
-            # Usa os valores ajustados:
+            # Aguarda a linha ser criada
+            self.page.wait_for_timeout(800)
             
-            # Preenche data
-            # self.page.fill('input[name="data"]', registro_ajustado.data)
+            # 2. Obtém o índice da nova linha (última linha adicionada)
+            idx_linha = self.obter_ultima_linha_tabela()
+            logger.info(f"Nova linha adicionada no índice: {idx_linha}")
             
-            # Preenche horário de entrada
-            # self.page.fill('input[name="entrada"]', registro_ajustado.entrada)
+            # 3. Preenche a data na primeira coluna
+            xpath_input_data = f'//*[@id="TableTimesheet"]/tbody/tr[{idx_linha}]/td[1]/div/input'
+            input_data = self.page.locator(f'xpath={xpath_input_data}')
+            input_data.wait_for(state="visible", timeout=5000)
+            input_data.click()
+            self.page.wait_for_timeout(100)
+            input_data.fill("")  # Limpa o campo
+            input_data.type(registro_ajustado.data, delay=50)  # Digita caractere por caractere
+            input_data.press("Tab")  # Sai do campo para confirmar
+            self.page.wait_for_timeout(500)
             
-            # Preenche saída para almoço
-            # self.page.fill('input[name="saida_almoco"]', registro_ajustado.saida_almoco)
+            # 4. Monta lista de pares de horários (entrada, saída) para preencher
+            # Cada par de horário representa uma linha E-S
+            pares_horarios = [
+                (registro_ajustado.entrada, registro_ajustado.saida_almoco),
+                (registro_ajustado.retorno_almoco, registro_ajustado.saida)
+            ]
             
-            # Preenche retorno do almoço
-            # self.page.fill('input[name="retorno_almoco"]', registro_ajustado.retorno_almoco)
+            # Dropdown para adicionar registros E-S adicionais
+            xpath_dropdown = f'//*[@id="TableTimesheet"]/tbody/tr[{idx_linha}]/td[1]/div/div/button'
+            xpath_opcao_es = f'//*[@id="TableTimesheet"]/tbody/tr[{idx_linha}]/td[1]/div/div/ul/li[1]/a'
+            dropdown = self.page.locator(f'xpath={xpath_dropdown}')
+            opcao_es = self.page.locator(f'xpath={xpath_opcao_es}')
             
-            # Preenche horário de saída
-            # self.page.fill('input[name="saida"]', registro_ajustado.saida)
+            # 5. Preenche cada par de horários, adicionando linhas E-S conforme necessário
+            for idx_par, (hora_entrada, hora_saida) in enumerate(pares_horarios):
+                # Formata horários garantindo 2 dígitos (ex: 08:00)
+                hora_entrada_fmt = formatar_horario(hora_entrada)
+                hora_saida_fmt = formatar_horario(hora_saida)
+                
+                # A primeira linha E-S já vem pronta, as demais precisam ser adicionadas
+                if idx_par > 0:
+                    # Adiciona nova linha E-S via dropdown
+                    dropdown.click()
+                    self.page.wait_for_timeout(200)
+                    opcao_es.click()
+                    self.page.wait_for_timeout(500)
+                
+                # Atualiza lista de linhas após possível adição
+                linhas_clock = self.page.locator(f'#TableTimesheet tbody tr.dynamic:nth-child({idx_linha}) table.table-clockInOut tbody tr.dynamicClockInOut').all()
+                
+                # Preenche a linha E-S correspondente
+                if len(linhas_clock) > idx_par:
+                    linha_clock = linhas_clock[idx_par]
+                    
+                    # Seleciona "ATIVIDADE EXTERNA" no select
+                    select_tipo = linha_clock.locator('select.ddl-access-type')
+                    if select_tipo.count() > 0:
+                        select_tipo.select_option(value="ATIVIDADE EXTERNA")
+                        self.page.wait_for_timeout(200)
+                    
+                    # Preenche entrada (clockin) - click, limpa e digita
+                    input_entrada = linha_clock.locator('input.textbox-clockin')
+                    if input_entrada.count() > 0:
+                        input_entrada.click()
+                        input_entrada.fill("")
+                        input_entrada.type(hora_entrada_fmt, delay=30)
+                        self.page.wait_for_timeout(100)
+                    
+                    # Preenche saída (clockout) - click, limpa e digita
+                    input_saida = linha_clock.locator('input.textbox-clockout')
+                    if input_saida.count() > 0:
+                        input_saida.click()
+                        input_saida.fill("")
+                        input_saida.type(hora_saida_fmt, delay=30)
+                        self.page.wait_for_timeout(100)
+                    
+                    logger.debug(f"Preenchido par {idx_par + 1}: {hora_entrada_fmt} - {hora_saida_fmt}")
             
-            # Preenche observação se houver
-            # if registro.observacao:
-            #     self.page.fill('textarea[name="observacao"]', registro.observacao)
+            # 6. Calcula total de horas trabalhadas
+            horas_trabalhadas = self._calcular_horas_trabalhadas(
+                registro_ajustado.entrada,
+                registro_ajustado.saida_almoco,
+                registro_ajustado.retorno_almoco,
+                registro_ajustado.saida
+            )
+            logger.info(f"Horas trabalhadas calculadas: {horas_trabalhadas}")
             
-            # Clica no botão de salvar
-            # self.page.click('button[type="submit"], input[value="Salvar"]')
+            # 7. Preenche as horas apontadas na tabela de apontamento
+            # O ID da linha é baseado no índice (0, 1, 2...), que corresponde a idx_linha - 2
+            # (pois idx_linha começa em 2: template=1, primeira linha=2)
+            id_linha_apontamento = idx_linha - 2
+            xpath_input_horas = f'//*[@id="{id_linha_apontamento}"]/td[2]/input'
+            input_horas = self.page.locator(f'xpath={xpath_input_horas}')
             
-            # Aguarda confirmação
-            self.page.wait_for_load_state("networkidle")
+            if input_horas.count() > 0:
+                input_horas.click()
+                input_horas.fill("")
+                input_horas.type(horas_trabalhadas, delay=30)
+                self.page.wait_for_timeout(300)
+                logger.debug(f"Horas preenchidas no id={id_linha_apontamento}: {horas_trabalhadas}")
+            else:
+                # Fallback: tenta localizar dentro da linha específica
+                linhas_timesheet = self.page.locator(f'#TableTimesheet tbody tr.dynamic:nth-child({idx_linha}) table.table-timesheetrecording tbody tr.dynamicTimesheetrecording').all()
+                if linhas_timesheet:
+                    linha_apontamento = linhas_timesheet[-1]
+                    input_horas_alt = linha_apontamento.locator('td:nth-child(2) input')
+                    if input_horas_alt.count() > 0:
+                        input_horas_alt.click()
+                        input_horas_alt.fill("")
+                        input_horas_alt.type(horas_trabalhadas, delay=30)
+                        self.page.wait_for_timeout(300)
+                        logger.debug(f"Horas preenchidas (fallback): {horas_trabalhadas}")
             
-            # Registra horários utilizados no validador (usa os ajustados)
+            # 8. Clica no botão para selecionar OSI/Projeto/Atividade
+            # Busca a linha de apontamento (timesheetrecording)
+            linhas_timesheet = self.page.locator(f'#TableTimesheet tbody tr.dynamic:nth-child({idx_linha}) table.table-timesheetrecording tbody tr.dynamicTimesheetrecording').all()
+            
+            if linhas_timesheet:
+                linha_apontamento = linhas_timesheet[-1]
+                
+                botao_selecionar_osi = linha_apontamento.locator('span.input-group-btn button.button-show-items')
+                if botao_selecionar_osi.count() > 0:
+                    botao_selecionar_osi.click()
+                    self.page.wait_for_timeout(500)
+                    
+                    # 9. Aguarda o modal aparecer e clica na opção do projeto
+                    botao_projeto = self.page.locator('xpath=/html/body/div[7]/div/div/div[2]/table/tbody/tr[2]/td[1]/button/i')
+                    botao_projeto.wait_for(state="visible", timeout=5000)
+                    botao_projeto.click()
+                    self.page.wait_for_timeout(500)
+            
+            # Registra horários utilizados no validador
             self.validador.registrar_horarios_utilizados(
                 registro_ajustado.data,
                 [registro_ajustado.entrada, registro_ajustado.saida_almoco, 
@@ -430,6 +683,68 @@ class AutomacaoSSG:
         except Exception as e:
             logger.error(f"Erro ao registrar ponto {registro.data}: {e}")
             return False, []
+    
+    def _calcular_horas_trabalhadas(self, entrada: str, saida_almoco: str, retorno_almoco: str, saida: str) -> str:
+        """
+        Calcula o total de horas trabalhadas no dia.
+        
+        Args:
+            entrada: Horário de entrada (HH:MM)
+            saida_almoco: Horário de saída para almoço (HH:MM)
+            retorno_almoco: Horário de retorno do almoço (HH:MM)
+            saida: Horário de saída (HH:MM)
+            
+        Returns:
+            Total de horas no formato HH:MM
+        """
+        try:
+            def horario_para_minutos(horario: str) -> int:
+                h, m = map(int, horario.split(':'))
+                return h * 60 + m
+            
+            # Período da manhã
+            minutos_manha = horario_para_minutos(saida_almoco) - horario_para_minutos(entrada)
+            
+            # Período da tarde
+            minutos_tarde = horario_para_minutos(saida) - horario_para_minutos(retorno_almoco)
+            
+            # Total
+            total_minutos = minutos_manha + minutos_tarde
+            
+            horas = total_minutos // 60
+            minutos = total_minutos % 60
+            
+            return f"{horas:02d}:{minutos:02d}"
+            
+        except Exception as e:
+            logger.error(f"Erro ao calcular horas trabalhadas: {e}")
+            return "08:00"  # Valor padrão em caso de erro
+    
+    def confirmar_apontamentos(self) -> bool:
+        """
+        Clica no botão de confirmar/salvar todos os apontamentos.
+        
+        Returns:
+            True se confirmou com sucesso, False caso contrário.
+        """
+        logger.info("Confirmando apontamentos...")
+        
+        try:
+            # Clica no botão de salvar (ícone de check/confirmar)
+            botao_salvar = self.page.locator('xpath=/html/body/div[3]/div[3]/div[1]/h3/span/i[3]')
+            botao_salvar.wait_for(state="visible", timeout=5000)
+            botao_salvar.click()
+            
+            # Aguarda processamento
+            self.page.wait_for_load_state("networkidle")
+            self.page.wait_for_timeout(1000)
+            
+            logger.info("Apontamentos confirmados com sucesso")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erro ao confirmar apontamentos: {e}")
+            return False
     
     def navegar_para_timesheet(self) -> bool:
         """

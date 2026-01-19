@@ -11,8 +11,11 @@ ssg:
 # Configurações de Login
 # IMPORTANTE: Preencha com suas credenciais do SSG
 credentials:
-  username: "seu_usuario_aqui"
-  password: "sua_senha_aqui"
+  username: "seu.usuario"
+  password: "sua_senha"
+  # Secret key do TOTP para 2FA automático (opcional)
+  # Obtenha reconfigurando o 2FA e copiando a secret key
+  # totp_secret: "SUASECRETKEYAQUI"
 
 # Configurações de Arquivo de Pontos
 arquivo_pontos:
@@ -24,10 +27,12 @@ arquivo_pontos:
   formato: "xlsx"
 
 # Regras de Validação de Horários
-# Estas regras fazem AJUSTES AUTOMÁTICOS nos horários para evitar erros
+# Estas regras fazem AJUSTES AUTOMÁTICOS nos horários para evitar erros do SSG
+# IMPORTANTE: O total de horas trabalhadas é SEMPRE mantido igual ao original
+# Quando um horário é ajustado, a saída é compensada automaticamente
 validacao:
-  # Ajusta horários redondos automaticamente (ex: 08:00 -> 08:05)
-  # Horários com :00 recebem minutos aleatórios entre 1-12
+  # Ajusta horários redondos automaticamente (ex: 08:00 -> 08:01)
+  # Compensa na saída para manter o total de horas
   bloquear_horarios_redondos: true
   
   # Quantidade de dias para verificar horários duplicados
@@ -35,10 +40,12 @@ validacao:
   
   # Ajusta horários duplicados automaticamente (+1min)
   # Se 12:12 já foi usado nos últimos 5 dias, vira 12:13
+  # Compensa na saída para manter o total de horas
   bloquear_horarios_duplicados: true
   
   # Ajusta almoço de exatamente 1 hora automaticamente (+1min)
   # Almoço de 60min exatos vira 61min
+  # Compensa na saída para manter o total de horas
   bloquear_almoco_1_hora_exata: true
 
 # Configurações de Automação
@@ -53,6 +60,13 @@ automacao:
   selecionar_mes_atual: true
   # Ignorar datas já cadastradas no SSG
   ignorar_datas_existentes: true
+  # Usar o Chrome instalado no sistema (recomendado para passar no Cloudflare)
+  usar_chrome_sistema: true
+  # Caminho do Chrome (deixe vazio para detecção automática)
+  chrome_path: ""
+  # Usar perfil padrão do Chrome do usuário (com sessões e cookies existentes)
+  # ATENÇÃO: Se true, feche o Chrome antes de executar o script
+  usar_perfil_chrome: false
 
 # Configurações de Log
 log:

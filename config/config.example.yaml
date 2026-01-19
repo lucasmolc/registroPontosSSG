@@ -14,7 +14,14 @@ credentials:
   username: "seu.usuario"
   password: "sua_senha"
   # Secret key do TOTP para 2FA automático (opcional)
-  # Obtenha reconfigurando o 2FA e copiando a secret key
+  # Para obter a secret key:
+  #   1. Reconfigure o 2FA no portal Sysmap
+  #   2. Salve o QR code como imagem (qr.jpeg)
+  #   3. Execute: python decode_qr.py qr.jpeg
+  #   4. Copie a secret key exibida
+  #   5. Escaneie o QR code no Microsoft Authenticator (backup)
+  #   6. Apague a imagem do QR code
+  # Se configurado, o 2FA será preenchido automaticamente
   # totp_secret: "SUASECRETKEYAQUI"
 
 # Configurações de Arquivo de Pontos

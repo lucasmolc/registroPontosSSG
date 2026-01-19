@@ -5,3 +5,10 @@ openpyxl==3.1.2
 pandas==2.1.4
 pyyaml==6.0.1
 loguru==0.7.2
+
+# Opcional - para 2FA automático
+pyotp==2.9.0
+
+# Opcional - para decodificar QR code do 2FA
+pillow==10.2.0
+pyzbar==0.1.9

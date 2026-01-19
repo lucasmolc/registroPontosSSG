@@ -159,20 +159,53 @@ python main.py
 
 ## 🔒 2FA Automático (Opcional)
 
-Se você tiver a **secret key** do TOTP, pode automatizar o 2FA:
+Se você tiver a **secret key** do TOTP, pode automatizar o 2FA.
 
-1. Obtenha a secret key reconfigurando o 2FA no portal
-2. Adicione no `config.yaml`:
-   ```yaml
-   credentials:
-     totp_secret: "SUASECRETKEYAQUI"
-   ```
-3. Instale o pyotp:
+### Passo 1: Obter a Secret Key
+
+A secret key está embutida no QR code do 2FA. Para extraí-la:
+
+1. Reconfigure o 2FA no portal Sysmap para obter um novo QR code
+2. Salve a imagem do QR code como `qr.jpeg` na pasta do projeto
+3. Execute o script de decodificação:
    ```bash
-   pip install pyotp
+   # Windows (usando venv)
+   .\venv\Scripts\python.exe decode_qr.py qr.jpeg
+   
+   # Ou com Python global
+   python decode_qr.py qr.jpeg
    ```
+4. O script mostrará a secret key:
+   ```
+   === Informações extraídas ===
+   Secret Key: SUASECRETKEYAQUI
+   Issuer: SysMap
+   ```
+5. **Importante:** Escaneie o QR code no Microsoft Authenticator também (backup)
+6. Apague a imagem do QR code após extrair a secret key
 
-⚠️ **Atenção**: Armazenar a secret key reduz a segurança do 2FA.
+### Passo 2: Configurar no config.yaml
+
+Adicione a secret key no arquivo de configuração:
+```yaml
+credentials:
+  username: "seu.usuario"
+  password: "sua_senha"
+  totp_secret: "SUASECRETKEYAQUI"
+```
+
+### Passo 3: Instalar dependência
+
+```bash
+pip install pyotp
+```
+
+### Como funciona
+
+- Se `totp_secret` estiver configurado → 2FA é preenchido **automaticamente**
+- Se não estiver → aguarda preenchimento manual (como antes)
+
+⚠️ **Segurança**: Armazenar a secret key no computador reduz a segurança do 2FA. Mantenha o arquivo `config.yaml` protegido e nunca o envie para repositórios públicos.
 
 ## 🔧 Regras de Validação Automática
 

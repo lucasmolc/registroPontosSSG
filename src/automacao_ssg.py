@@ -299,15 +299,41 @@ class AutomacaoSSG:
             
             logger.info("Credenciais preenchidas")
             
-            # 5. Coloca o foco no campo de 2FA para preenchimento manual
-            print("   🔐 Digite o código 2FA no navegador...")
-            
-            # Aguarda o campo de 2FA aparecer e coloca o foco nele
+            # 5. Preenche o código 2FA (automático ou manual)
             try:
                 self.page.wait_for_selector('#googleotp', state="visible", timeout=10000)
                 campo_2fa = self.page.locator('#googleotp')
                 campo_2fa.focus()
-                logger.info("Foco no campo 2FA")
+                
+                # Verifica se tem secret key configurada para 2FA automático
+                if self.settings.totp_secret:
+                    try:
+                        import pyotp
+                        totp = pyotp.TOTP(self.settings.totp_secret)
+                        codigo_2fa = totp.now()
+                        
+                        print(f"   🔐 2FA automático: {codigo_2fa}")
+                        logger.info(f"Preenchendo código 2FA automaticamente")
+                        
+                        campo_2fa.fill(codigo_2fa)
+                        self.page.wait_for_timeout(500)
+                        
+                        # Clica no botão de login
+                        botao_login = self.page.locator(
+                            'input[type="submit"], button[type="submit"], input[name="wp-submit"]'
+                        ).first
+                        botao_login.click()
+                        
+                    except ImportError:
+                        logger.warning("pyotp não instalado - 2FA manual")
+                        print("   🔐 Digite o código 2FA no navegador...")
+                    except Exception as e:
+                        logger.warning(f"Erro ao gerar código TOTP: {e}")
+                        print("   🔐 Digite o código 2FA no navegador...")
+                else:
+                    print("   🔐 Digite o código 2FA no navegador...")
+                    logger.info("Foco no campo 2FA - aguardando preenchimento manual")
+                    
             except Exception as e:
                 logger.warning(f"Campo 2FA não encontrado: {e}")
                 # Se não encontrar o campo 2FA, clica no botão de login

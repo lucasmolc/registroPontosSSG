@@ -58,6 +58,11 @@ class Settings:
         return os.getenv("SSG_PASSWORD") or self._config.get("credentials", {}).get("password", "")
     
     @property
+    def totp_secret(self) -> str:
+        """Secret key do TOTP para 2FA automático (opcional)."""
+        return os.getenv("SSG_TOTP_SECRET") or self._config.get("credentials", {}).get("totp_secret", "")
+    
+    @property
     def arquivo_pontos_diretorio(self) -> Path:
         """Diretório do arquivo de pontos."""
         diretorio = self._config.get("arquivo_pontos", {}).get("diretorio", "data/pontos")

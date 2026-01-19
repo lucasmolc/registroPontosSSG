@@ -1,0 +1,62 @@
+# =============================================================
+# ARQUIVO DE EXEMPLO DE CONFIGURAÇÃO
+# Copie este arquivo para config.yaml e preencha suas credenciais
+# =============================================================
+
+# Configurações do Sistema SSG
+ssg:
+  url: "https://ssg.sysmap.com.br"
+  timesheet_url: "https://ssg.sysmap.com.br/new/timesheet/timesheetrecording.asp"
+  
+# Configurações de Login
+# IMPORTANTE: Preencha com suas credenciais do SSG
+credentials:
+  username: "seu_usuario_aqui"
+  password: "sua_senha_aqui"
+
+# Configurações de Arquivo de Pontos
+arquivo_pontos:
+  # Diretório onde o arquivo de pontos deve estar
+  diretorio: "data/pontos"
+  # Nome do arquivo de pontos
+  nome_arquivo: "pontos.xlsx"
+  # Formato do arquivo (xlsx ou csv)
+  formato: "xlsx"
+
+# Regras de Validação de Horários
+# Estas regras fazem AJUSTES AUTOMÁTICOS nos horários para evitar erros
+validacao:
+  # Ajusta horários redondos automaticamente (ex: 08:00 -> 08:05)
+  # Horários com :00 recebem minutos aleatórios entre 1-12
+  bloquear_horarios_redondos: true
+  
+  # Quantidade de dias para verificar horários duplicados
+  dias_verificar_duplicados: 5
+  
+  # Ajusta horários duplicados automaticamente (+1min)
+  # Se 12:12 já foi usado nos últimos 5 dias, vira 12:13
+  bloquear_horarios_duplicados: true
+  
+  # Ajusta almoço de exatamente 1 hora automaticamente (+1min)
+  # Almoço de 60min exatos vira 61min
+  bloquear_almoco_1_hora_exata: true
+
+# Configurações de Automação
+automacao:
+  # Timeout para operações em milissegundos
+  timeout: 30000
+  # Executar navegador em modo invisível
+  headless: false
+  # Delay entre ações (em ms) - útil para debug
+  slow_mo: 100
+  # Sempre selecionar mês atual ao entrar na página
+  selecionar_mes_atual: true
+  # Ignorar datas já cadastradas no SSG
+  ignorar_datas_existentes: true
+
+# Configurações de Log
+log:
+  # Nível de log: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  nivel: "INFO"
+  # Arquivo de log
+  arquivo: "logs/registro_pontos.log"

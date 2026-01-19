@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Browser data (Playwright persistent profile)
+browser_data/
+
 # C extensions
 *.so
 
@@ -205,3 +208,20 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# ===========================================
+# Configurações específicas do projeto
+# ===========================================
+
+# Config com credenciais (usar config.example.yaml como base)
+config/config.yaml
+
+# Pasta de pontos do usuário
+data/pontos/
+
+# Logs
+logs/
+*.log
+
+# Virtual Environment
+venv/
+.venv/

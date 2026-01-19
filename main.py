@@ -118,14 +118,19 @@ def main():
                 print("\n💾 Confirmando apontamentos...")
                 if automacao.confirmar_apontamentos():
                     print("✅ Apontamentos salvos!")
+                    
+                    # Aguarda usuário clicar no OK do modal
+                    print("⏳ Clique em OK no modal para finalizar...")
+                    if automacao.fechar_modal_confirmacao():
+                        print("✅ Confirmação finalizada!")
+                    else:
+                        print("⚠️  Modal de confirmação não encontrado")
                 else:
                     print("❌ Erro ao salvar apontamentos")
             
             # Resumo final
             print(f"\n📊 Resultado: ✅ {sucessos} | ⏭️ {ignorados} | ❌ {falhas}")
-            
-            # BREAKPOINT: Mantém browser aberto para validação
-            input("\n⏸️  Pressione ENTER para fechar o navegador...")
+            print("\n🎉 Execução finalizada!")
         
         logger.info(f"Concluído - Sucessos: {sucessos}, Ignorados: {ignorados}, Falhas: {falhas}")
         

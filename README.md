@@ -12,6 +12,9 @@ Sistema em Python para leitura automática de arquivos de pontos (Excel/CSV) e r
 - ✅ Preenchimento automático de E-S (Entrada-Saída) com múltiplos registros
 - ✅ Seleção automática de projeto/OSI
 - ✅ Suporte a 2FA via TOTP (opcional)
+- ✅ Compensação automática de horas ao ajustar horários
+- ✅ Geração de executável (.exe) para distribuição
+- ✅ Criação automática de ZIP para compartilhamento
 
 ## 📁 Estrutura do Projeto
 
@@ -34,6 +37,8 @@ registroPontosSSG/
 │   └── logger_config.py    # Configuração de logs
 ├── browser_data/           # Dados do navegador (sessão)
 ├── bootstrap.py            # Configuração automática do ambiente
+├── build_exe.py            # Script para gerar executável
+├── decode_qr.py            # Extração de secret key do QR code
 ├── main.py                 # Ponto de entrada
 ├── README.md
 └── requirements.txt
@@ -271,6 +276,39 @@ Quando um horário precisa ser ajustado (por ser redondo ou duplicado), o sistem
 - O sistema aguarda ENTER antes de fechar
 - Verifique se há erros no log
 
-## 📄 Licença
+## � Geração de Executável
+
+Para gerar um executável distribuível:
+
+```bash
+python build_exe.py
+```
+
+O script irá:
+1. Gerar `RegistroPontosSSG.exe` na pasta `dist/`
+2. Criar estrutura de distribuição com pastas necessárias
+3. Copiar arquivos de configuração e documentação
+4. Criar arquivo `RegistroPontosSSG.zip` pronto para compartilhar
+
+### Conteúdo do ZIP
+
+```
+RegistroPontosSSG/
+├── RegistroPontosSSG.exe    # Executável
+├── config/
+│   └── config.example.yaml  # Template de configuração
+├── data/
+│   └── pontos/              # Colocar pontos.xlsx aqui
+├── logs/                    # Logs de execução
+├── LEIA-ME.txt              # Instruções rápidas
+└── README.md                # Documentação completa
+```
+
+### Primeira Execução do Executável
+
+Na primeira execução, o Playwright precisará baixar o navegador Chrome (~150MB).
+Isso é automático e acontece apenas uma vez.
+
+## �📄 Licença
 
 MIT License

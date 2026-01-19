@@ -772,6 +772,34 @@ class AutomacaoSSG:
             logger.error(f"Erro ao confirmar apontamentos: {e}")
             return False
     
+    def fechar_modal_confirmacao(self) -> bool:
+        """
+        Aguarda o usuário clicar no botão OK do modal de confirmação.
+        
+        Returns:
+            True se o modal foi fechado, False caso contrário.
+        """
+        logger.info("Aguardando usuário confirmar no modal...")
+        
+        try:
+            # Aguarda o botão OK aparecer no modal
+            botao_ok = self.page.locator('xpath=/html/body/div[9]/div/div/div[2]/button')
+            botao_ok.wait_for(state="visible", timeout=30000)
+            
+            logger.info("Modal exibido - aguardando usuário clicar em OK...")
+            
+            # Aguarda o botão desaparecer (usuário clicou)
+            botao_ok.wait_for(state="hidden", timeout=300000)  # 5 minutos
+            
+            self.page.wait_for_timeout(500)
+            
+            logger.info("Modal de confirmação fechado pelo usuário")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erro ao aguardar modal de confirmação: {e}")
+            return False
+    
     def navegar_para_timesheet(self) -> bool:
         """
         Navega para a página de timesheet.

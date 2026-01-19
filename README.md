@@ -179,25 +179,49 @@ Para obter a secret key, você precisa **reconfigurar o 2FA** no portal Sysmap:
 
 ### Passo 1: Extrair a Secret Key do QR Code
 
-A secret key está embutida no QR code. Para extraí-la, use o script `decode_qr.py`:
+A secret key está embutida no QR code. Existem várias formas de extraí-la:
 
-> **Nota:** Este script precisa ser executado via Python (não está incluído no .exe) pois requer bibliotecas de processamento de imagem.
+#### Opção A: Sites de Leitura de QR Code (Recomendado)
 
-```bash
-# Instalar dependências necessárias (apenas uma vez)
-pip install pillow pyzbar
+Use um site para ler o conteúdo do QR code:
 
-# Executar o script
-python decode_qr.py qr.png
-```
+| Site | URL |
+|------|-----|
+| WebQR | https://webqr.com |
+| QR Code Reader | https://qrcodescan.in |
+| 4QRCode | https://4qrcode.com/scan-qr-code.php |
+| ZXing Decoder | https://zxing.org/w/decode.jspx |
 
-O script mostrará a secret key:
-```
-=== Informações extraídas ===
-Secret Key: SUASECRETKEYAQUI
-Issuer: SysMap
-Label: seu.usuario@sysmap.com.br
-```
+**Passo a passo:**
+1. Acesse um dos sites acima
+2. Faça upload da imagem do QR code
+3. O site exibirá uma URL no formato:
+   ```
+   otpauth://totp/SysMap:seu.usuario@sysmap.com.br?secret=SUASECRETKEYAQUI&issuer=SysMap
+   ```
+4. Copie o valor após `secret=` (até o próximo `&`)
+   - Exemplo: se a URL tem `secret=ABC123XYZ&issuer=`, a secret key é `ABC123XYZ`
+
+#### Opção B: Aplicativos de Celular
+
+Alguns apps de Authenticator permitem exportar a secret key:
+
+1. **Aegis Authenticator** (Android - Open Source)
+   - Escaneie o QR code
+   - Toque e segure na conta adicionada
+   - Selecione "Editar"
+   - A secret key será exibida
+
+2. **2FAS** (Android/iOS)
+   - Escaneie o QR code
+   - Acesse as configurações da conta
+   - Opção "Exibir chave secreta"
+
+#### Opção C: Extensão do Navegador
+
+1. Instale a extensão **Authenticator** (disponível para Chrome/Firefox/Edge)
+   - Chrome: https://chrome.google.com/webstore/detail/authenticator/bhghoamapcdpbohphigoooaddinpkbai
+2. Ao escanear o QR code, a extensão mostra a secret key automaticamente
 
 ### Passo 2: Configurar no config.yaml
 
@@ -214,8 +238,9 @@ credentials:
 
 Após configurar a secret key:
 1. **Apague a imagem do QR code** do seu computador
-2. Nunca compartilhe ou envie o QR code para ninguém
-3. Certifique-se de que o código funciona no Authenticator antes de apagar
+2. **Limpe o histórico** dos sites usados para decodificar (se aplicável)
+3. Nunca compartilhe ou envie o QR code para ninguém
+4. Certifique-se de que o código funciona no Authenticator antes de apagar
 
 ### Como funciona
 
@@ -226,27 +251,12 @@ Após configurar a secret key:
 
 O sistema gera o código TOTP usando a mesma lógica do Microsoft Authenticator, então os códigos são idênticos.
 
-### Usando o Executável (.exe)
-
-O executável `RegistroPontosSSG.exe` **suporta 2FA automático** - basta configurar o `totp_secret` no `config/config.yaml`.
-
-Para extrair a secret key, você tem duas opções:
-
-1. **Opção 1:** Use o código-fonte com Python
-   ```bash
-   python decode_qr.py qr.png
-   ```
-
-2. **Opção 2:** Use um site online de decode de QR code (menos seguro)
-   - Faça upload do QR code em um site como https://webqr.com
-   - Copie a URL exibida (começa com `otpauth://totp/...`)
-   - A secret key está no parâmetro `secret=` da URL
-
 ### ⚠️ Segurança
 
 - **Armazenar a secret key** no computador reduz a segurança do 2FA
-- Mantenha o arquivo `config.yaml` **protegido** e nunca o envie para repositórios públicos
+- Mantenha o arquivo `config.yaml` **protegido** e nunca o envie para ninguém
 - **Sempre mantenha o Authenticator** configurado como backup para login manual
+- Ao usar sites online, prefira os que processam localmente (WebQR processa no navegador)
 - Se suspeitar de comprometimento, solicite nova troca de dispositivo 2FA
 
 ## 🔧 Regras de Validação Automática

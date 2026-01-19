@@ -156,24 +156,56 @@ PRIMEIRA EXECUÇÃO:
 Na primeira vez, o Playwright precisará baixar o navegador Chrome.
 Isso pode demorar alguns minutos dependendo da sua internet.
 
-2FA AUTOMÁTICO (OPCIONAL):
---------------------------
-Para automatizar o preenchimento do código 2FA:
+================================================================================
+                        2FA AUTOMÁTICO (OPCIONAL)
+================================================================================
 
-1. Abra um chamado na Sysmap solicitando TROCA DE DISPOSITIVO DE 2FA
-2. Siga as instruções do suporte
-3. Durante a reconfiguração, TIRE UM PRINT do QR code exibido
-4. IMPORTANTE: Escaneie o QR code no seu Authenticator (backup para login manual)
-5. Use o script decode_qr.py para extrair a secret key:
+Para automatizar o preenchimento do código 2FA, siga os passos:
+
+1. SOLICITAR TROCA DE DISPOSITIVO
+   - Abra um chamado na Sysmap solicitando TROCA DE DISPOSITIVO DE 2FA
+   - Siga as instruções do suporte
+
+2. DURANTE A RECONFIGURAÇÃO
+   - Será exibido um QR code na tela
+   - TIRE UM PRINT/SCREENSHOT do QR code
+   - IMPORTANTE: Escaneie o QR code no seu Authenticator ANTES de continuar
+     (isso é seu backup para login manual!)
+
+3. EXTRAIR A SECRET KEY DO QR CODE
    
-   pip install pillow pyzbar
-   python decode_qr.py qr.png
+   Use um dos métodos abaixo:
+   
+   A) Sites de Leitura de QR Code (Recomendado):
+      - https://webqr.com (processa localmente, mais seguro)
+      - https://qrcodescan.in
+      - https://4qrcode.com/scan-qr-code.php
+      - https://zxing.org/w/decode.jspx
+      
+      Faça upload da imagem e copie o valor após "secret=" na URL exibida.
+      Exemplo: otpauth://totp/SysMap:usuario?secret=ABC123XYZ&issuer=SysMap
+                                                   ^^^^^^^^^^
+                                                   Esta é a secret key!
+   
+   B) App Aegis Authenticator (Android):
+      - Escaneie o QR code
+      - Toque e segure na conta
+      - Selecione "Editar" para ver a secret key
+   
+   C) Extensão Authenticator (Chrome/Firefox/Edge):
+      - Instale a extensão "Authenticator"
+      - Ao escanear, a secret key é exibida automaticamente
 
-6. Copie a "Secret Key" exibida para o config.yaml:
+4. CONFIGURAR NO config.yaml
+   
+   Adicione a linha no arquivo config/config.yaml:
    
    totp_secret: "SUASECRETKEYAQUI"
 
-7. APAGUE a imagem do QR code após configurar
+5. LIMPEZA (IMPORTANTE!)
+   - APAGUE a imagem do QR code
+   - Limpe o histórico do site usado (se aplicável)
+   - Nunca compartilhe o QR code ou a secret key
 
 IMPORTANTE: Mesmo com 2FA automático, mantenha o Authenticator configurado
 como backup para login manual caso necessário.

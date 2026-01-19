@@ -164,53 +164,90 @@ python main.py
 
 ## 🔒 2FA Automático (Opcional)
 
-Se você tiver a **secret key** do TOTP, pode automatizar o 2FA.
+Se você tiver a **secret key** do TOTP, pode automatizar o preenchimento do código 2FA no login.
 
-### Passo 1: Obter a Secret Key
+### Pré-requisito: Trocar Dispositivo de 2FA
 
-A secret key está embutida no QR code do 2FA. Para extraí-la:
+Para obter a secret key, você precisa **reconfigurar o 2FA** no portal Sysmap:
 
-1. Reconfigure o 2FA no portal Sysmap para obter um novo QR code
-2. Salve a imagem do QR code como `qr.jpeg` na pasta do projeto
-3. Execute o script de decodificação:
-   ```bash
-   # Windows (usando venv)
-   .\venv\Scripts\python.exe decode_qr.py qr.jpeg
-   
-   # Ou com Python global
-   python decode_qr.py qr.jpeg
-   ```
-4. O script mostrará a secret key:
-   ```
-   === Informações extraídas ===
-   Secret Key: SUASECRETKEYAQUI
-   Issuer: SysMap
-   ```
-5. **Importante:** Escaneie o QR code no Microsoft Authenticator também (backup)
-6. Apague a imagem do QR code após extrair a secret key
+1. **Abra um chamado** no suporte da Sysmap solicitando a **troca de dispositivo de 2FA**
+2. Aguarde a aprovação e siga as instruções do suporte
+3. Durante a reconfiguração, será exibido um **QR code** na tela
+4. **Tire um print/screenshot** da tela com o QR code e salve como imagem (ex: `qr.png` ou `qr.jpeg`)
+
+> ⚠️ **IMPORTANTE:** Antes de prosseguir, **escaneie o QR code no seu aplicativo Authenticator** (Microsoft Authenticator, Google Authenticator, etc.). Isso garante que você tenha um backup para login manual caso necessário.
+
+### Passo 1: Extrair a Secret Key do QR Code
+
+A secret key está embutida no QR code. Para extraí-la, use o script `decode_qr.py`:
+
+> **Nota:** Este script precisa ser executado via Python (não está incluído no .exe) pois requer bibliotecas de processamento de imagem.
+
+```bash
+# Instalar dependências necessárias (apenas uma vez)
+pip install pillow pyzbar
+
+# Executar o script
+python decode_qr.py qr.png
+```
+
+O script mostrará a secret key:
+```
+=== Informações extraídas ===
+Secret Key: SUASECRETKEYAQUI
+Issuer: SysMap
+Label: seu.usuario@sysmap.com.br
+```
 
 ### Passo 2: Configurar no config.yaml
 
 Adicione a secret key no arquivo de configuração:
+
 ```yaml
 credentials:
   username: "seu.usuario"
   password: "sua_senha"
-  totp_secret: "SUASECRETKEYAQUI"
+  totp_secret: "SUASECRETKEYAQUI"  # Secret key extraída do QR code
 ```
 
-### Passo 3: Instalar dependência
+### Passo 3: Apagar Imagem do QR Code
 
-```bash
-pip install pyotp
-```
+Após configurar a secret key:
+1. **Apague a imagem do QR code** do seu computador
+2. Nunca compartilhe ou envie o QR code para ninguém
+3. Certifique-se de que o código funciona no Authenticator antes de apagar
 
 ### Como funciona
 
-- Se `totp_secret` estiver configurado → 2FA é preenchido **automaticamente**
-- Se não estiver → aguarda preenchimento manual (como antes)
+| Configuração | Comportamento |
+|--------------|---------------|
+| `totp_secret` configurado | 2FA preenchido **automaticamente** |
+| `totp_secret` não configurado | Aguarda preenchimento **manual** |
 
-⚠️ **Segurança**: Armazenar a secret key no computador reduz a segurança do 2FA. Mantenha o arquivo `config.yaml` protegido e nunca o envie para repositórios públicos.
+O sistema gera o código TOTP usando a mesma lógica do Microsoft Authenticator, então os códigos são idênticos.
+
+### Usando o Executável (.exe)
+
+O executável `RegistroPontosSSG.exe` **suporta 2FA automático** - basta configurar o `totp_secret` no `config/config.yaml`.
+
+Para extrair a secret key, você tem duas opções:
+
+1. **Opção 1:** Use o código-fonte com Python
+   ```bash
+   python decode_qr.py qr.png
+   ```
+
+2. **Opção 2:** Use um site online de decode de QR code (menos seguro)
+   - Faça upload do QR code em um site como https://webqr.com
+   - Copie a URL exibida (começa com `otpauth://totp/...`)
+   - A secret key está no parâmetro `secret=` da URL
+
+### ⚠️ Segurança
+
+- **Armazenar a secret key** no computador reduz a segurança do 2FA
+- Mantenha o arquivo `config.yaml` **protegido** e nunca o envie para repositórios públicos
+- **Sempre mantenha o Authenticator** configurado como backup para login manual
+- Se suspeitar de comprometimento, solicite nova troca de dispositivo 2FA
 
 ## 🔧 Regras de Validação Automática
 

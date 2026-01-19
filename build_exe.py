@@ -139,7 +139,6 @@ CONFIGURAÇÃO INICIAL:
 2. Edite 'config/config.yaml' com suas credenciais:
    - username: seu usuário do SSG
    - password: sua senha
-   - totp_secret: (opcional) secret key do 2FA para login automático
 
 3. Coloque seu arquivo de pontos em 'data/pontos/pontos.xlsx'
 
@@ -156,6 +155,28 @@ PRIMEIRA EXECUÇÃO:
 ------------------
 Na primeira vez, o Playwright precisará baixar o navegador Chrome.
 Isso pode demorar alguns minutos dependendo da sua internet.
+
+2FA AUTOMÁTICO (OPCIONAL):
+--------------------------
+Para automatizar o preenchimento do código 2FA:
+
+1. Abra um chamado na Sysmap solicitando TROCA DE DISPOSITIVO DE 2FA
+2. Siga as instruções do suporte
+3. Durante a reconfiguração, TIRE UM PRINT do QR code exibido
+4. IMPORTANTE: Escaneie o QR code no seu Authenticator (backup para login manual)
+5. Use o script decode_qr.py para extrair a secret key:
+   
+   pip install pillow pyzbar
+   python decode_qr.py qr.png
+
+6. Copie a "Secret Key" exibida para o config.yaml:
+   
+   totp_secret: "SUASECRETKEYAQUI"
+
+7. APAGUE a imagem do QR code após configurar
+
+IMPORTANTE: Mesmo com 2FA automático, mantenha o Authenticator configurado
+como backup para login manual caso necessário.
 
 SUPORTE:
 --------

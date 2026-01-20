@@ -133,14 +133,36 @@ def criar_estrutura_dist(base_dir: Path):
            SISTEMA DE REGISTRO AUTOMÁTICO DE PONTOS SSG
 ================================================================================
 
+REQUISITOS DO SISTEMA:
+----------------------
+- Windows 10 ou superior (64 bits)
+- Google Chrome instalado (recomendado, mas não obrigatório)
+- Conexão com internet
+- NÃO é necessário ter Python instalado
+
+NOTA: Na primeira execução, o sistema baixará automaticamente o navegador
+Chromium (~150 MB). Isso acontece apenas uma vez e pode demorar alguns minutos.
+
+================================================================================
+
 CONFIGURAÇÃO INICIAL:
 ---------------------
 1. Renomeie 'config/config.example.yaml' para 'config/config.yaml'
+
 2. Edite 'config/config.yaml' com suas credenciais:
-   - username: seu usuário do SSG
-   - password: sua senha
+   
+   credentials:
+     username: "seu.usuario"
+     password: "sua_senha"
+     totp_secret: "SUASECRETKEYAQUI"   # Opcional - ver seção 2FA abaixo
+   
+   - username: seu usuário do SSG (ex: joao.silva)
+   - password: sua senha do SSG
+   - totp_secret: (OPCIONAL) secret key do 2FA para login automático
+     Se não configurado, você precisará digitar o código 2FA manualmente.
 
 3. Coloque seu arquivo de pontos em 'data/pontos/pontos.xlsx'
+   O arquivo deve conter as colunas: data, entrada, saida_almoco, retorno_almoco, saida
 
 EXECUÇÃO:
 ---------
@@ -148,6 +170,7 @@ EXECUÇÃO:
 2. O sistema irá:
    - Ler o arquivo de pontos
    - Abrir o navegador e fazer login
+   - Preencher o código 2FA automaticamente (se totp_secret configurado)
    - Preencher os pontos automaticamente
    - Aguardar sua confirmação no modal final
 
@@ -160,7 +183,8 @@ Isso pode demorar alguns minutos dependendo da sua internet.
                         2FA AUTOMÁTICO (OPCIONAL)
 ================================================================================
 
-Para automatizar o preenchimento do código 2FA, siga os passos:
+Para automatizar o preenchimento do código 2FA, você precisa obter a 
+"secret key" do seu autenticador. Siga os passos:
 
 1. SOLICITAR TROCA DE DISPOSITIVO
    - Abra um chamado na Sysmap solicitando TROCA DE DISPOSITIVO DE 2FA
@@ -168,7 +192,7 @@ Para automatizar o preenchimento do código 2FA, siga os passos:
 
 2. DURANTE A RECONFIGURAÇÃO
    - Será exibido um QR code na tela
-   - TIRE UM PRINT/SCREENSHOT do QR code
+   - TIRE UM PRINT/SCREENSHOT do QR code e salve como imagem
    - IMPORTANTE: Escaneie o QR code no seu Authenticator ANTES de continuar
      (isso é seu backup para login manual!)
 
@@ -183,32 +207,49 @@ Para automatizar o preenchimento do código 2FA, siga os passos:
       - https://zxing.org/w/decode.jspx
       
       Faça upload da imagem e copie o valor após "secret=" na URL exibida.
-      Exemplo: otpauth://totp/SysMap:usuario?secret=ABC123XYZ&issuer=SysMap
-                                                   ^^^^^^^^^^
-                                                   Esta é a secret key!
+      
+      Exemplo de URL exibida:
+      otpauth://totp/SysMap:usuario?secret=ABC123XYZ&issuer=SysMap
+                                          ^^^^^^^^^^
+                                          Esta é a secret key!
    
-   B) App Aegis Authenticator (Android):
+   B) App Aegis Authenticator (Android - Gratuito):
       - Escaneie o QR code
-      - Toque e segure na conta
+      - Toque e segure na conta adicionada
       - Selecione "Editar" para ver a secret key
    
-   C) Extensão Authenticator (Chrome/Firefox/Edge):
-      - Instale a extensão "Authenticator"
+   C) App 2FAS (Android/iOS - Gratuito):
+      - Escaneie o QR code
+      - Acesse configurações da conta
+      - Opção "Exibir chave secreta"
+   
+   D) Extensão Authenticator (Chrome/Firefox/Edge):
+      - Instale a extensão "Authenticator" do navegador
       - Ao escanear, a secret key é exibida automaticamente
 
 4. CONFIGURAR NO config.yaml
    
-   Adicione a linha no arquivo config/config.yaml:
+   Adicione a linha no arquivo config/config.yaml dentro de credentials:
    
-   totp_secret: "SUASECRETKEYAQUI"
+   credentials:
+     username: "seu.usuario"
+     password: "sua_senha"
+     totp_secret: "ABC123XYZ"   # Cole sua secret key aqui
 
 5. LIMPEZA (IMPORTANTE!)
-   - APAGUE a imagem do QR code
-   - Limpe o histórico do site usado (se aplicável)
-   - Nunca compartilhe o QR code ou a secret key
+   - APAGUE a imagem do QR code do seu computador
+   - Limpe o histórico do site usado para decode (se aplicável)
+   - Nunca compartilhe o QR code ou a secret key com ninguém
 
-IMPORTANTE: Mesmo com 2FA automático, mantenha o Authenticator configurado
-como backup para login manual caso necessário.
+IMPORTANTE: Mesmo com 2FA automático configurado, SEMPRE mantenha o 
+Authenticator no celular como backup para login manual caso necessário.
+
+SOLUÇÃO DE PROBLEMAS:
+--------------------
+- Se o login falhar, verifique se username/password estão corretos
+- Se o 2FA automático não funcionar, verifique a secret key
+- Logs são gravados na pasta 'logs/' para diagnóstico
+- Em caso de erro, a tela permanecerá aberta mostrando a mensagem
 
 SUPORTE:
 --------

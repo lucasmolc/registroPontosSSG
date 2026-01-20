@@ -2,12 +2,28 @@
 Módulo de configurações do sistema.
 """
 import os
+import sys
 from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
 # Carrega variáveis de ambiente
 load_dotenv()
+
+
+def get_base_dir() -> Path:
+    """
+    Retorna o diretório base do projeto.
+    Quando rodando como .exe (PyInstaller), usa o diretório do executável.
+    Quando rodando como script Python, usa o diretório do arquivo.
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Rodando como executável PyInstaller
+        # Usa o diretório onde o .exe está, não o diretório temporário
+        return Path(sys.executable).parent
+    else:
+        # Rodando como script Python normal
+        return Path(__file__).parent.parent
 
 
 class Settings:
@@ -20,7 +36,7 @@ class Settings:
         Args:
             config_path: Caminho para o arquivo de configuração YAML.
         """
-        self.base_dir = Path(__file__).parent.parent
+        self.base_dir = get_base_dir()
         self.config_path = config_path or self.base_dir / "config" / "config.yaml"
         self._config = self._load_config()
     

@@ -44,7 +44,45 @@ registroPontosSSG/
 └── requirements.txt
 ```
 
+## � Requisitos do Sistema
+
+### Para usar o Executável (.exe)
+
+| Requisito | Descrição |
+|-----------|------------|
+| Sistema Operacional | Windows 10 ou superior (64 bits) |
+| Python | **NÃO é necessário** ter Python instalado |
+| Navegador | Google Chrome instalado (recomendado) |
+| Internet | Conexão com internet para acessar o SSG |
+| Espaço em disco | ~500 MB (para o navegador Playwright na primeira execução) |
+
+> **Nota:** Na primeira execução, o sistema baixará automaticamente o navegador Chromium do Playwright (~150 MB). Isso acontece apenas uma vez.
+
+### Para usar com Python (desenvolvimento)
+
+| Requisito | Versão |
+|-----------|--------|
+| Python | 3.10 ou superior (testado com 3.11) |
+| pip | Incluído no Python |
+| Sistema Operacional | Windows, Linux ou macOS |
+
+**Dependências principais:**
+- playwright >= 1.40.0
+- pandas >= 2.0.0
+- openpyxl >= 3.1.0
+- pyyaml >= 6.0
+- loguru >= 0.7.0
+- pyotp >= 2.9.0 (opcional, para 2FA automático)
+
 ## 🚀 Instalação
+
+### Opção 1: Executável (Recomendado para usuários)
+
+1. Baixe o arquivo `RegistroPontosSSG.zip`
+2. Extraia para uma pasta de sua preferência
+3. Siga as instruções no arquivo `LEIA-ME.txt`
+
+### Opção 2: Python (Para desenvolvedores)
 
 1. Clone o repositório ou acesse a pasta do projeto:
 ```bash

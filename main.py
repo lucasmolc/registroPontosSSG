@@ -1,27 +1,41 @@
 """
 Sistema de Registro Automático de Pontos SSG
 """
-
-# Bootstrap - Configura ambiente automaticamente
-from bootstrap import ensure_environment
-if not ensure_environment():
-    print("\n❌ Falha ao configurar ambiente.")
-    exit(1)
-
-# Imports após garantir ambiente
 import sys
-from pathlib import Path
+import traceback
 
-from loguru import logger
+def pausar_antes_de_fechar():
+    """Pausa o console antes de fechar para que o usuário possa ver mensagens."""
+    print("\n" + "=" * 50)
+    input("Pressione ENTER para fechar...")
 
-from config import Settings
-from src.logger_config import configurar_logger
-from src.leitor_pontos import LeitorPontos
-from src.automacao_ssg import AutomacaoSSG
+def main_wrapper():
+    """Wrapper para capturar erros antes do bootstrap."""
+    try:
+        # Bootstrap - Configura ambiente automaticamente
+        from bootstrap import ensure_environment
+        if not ensure_environment():
+            print("\n❌ Falha ao configurar ambiente.")
+            return 1
+        
+        # Executa main principal
+        return main()
+    except Exception as e:
+        print(f"\n❌ ERRO FATAL: {e}")
+        print("\n--- Detalhes do erro ---")
+        traceback.print_exc()
+        return 1
 
-
+# Imports após garantir ambiente (serão carregados dentro do main)
 def main():
     """Função principal do sistema."""
+    from pathlib import Path
+    from loguru import logger
+    from config import Settings
+    from src.logger_config import configurar_logger
+    from src.leitor_pontos import LeitorPontos
+    from src.automacao_ssg import AutomacaoSSG
+    
     print("\n🚀 Registro Automático de Pontos SSG\n")
     
     try:
@@ -136,12 +150,28 @@ def main():
         
     except FileNotFoundError as e:
         print(f"❌ {e}")
-        sys.exit(1)
+        return 1
     except Exception as e:
-        logger.exception(f"Erro: {e}")
+        try:
+            logger.exception(f"Erro: {e}")
+        except:
+            pass  # Logger pode não estar configurado
         print(f"❌ Erro: {e}")
-        sys.exit(1)
+        print("\n--- Detalhes do erro ---")
+        traceback.print_exc()
+        return 1
+    
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        codigo_saida = main_wrapper()
+    except Exception as e:
+        print(f"\n❌ ERRO CRÍTICO: {e}")
+        traceback.print_exc()
+        codigo_saida = 1
+    finally:
+        pausar_antes_de_fechar()
+    
+    sys.exit(codigo_saida)

@@ -1,6 +1,7 @@
 """
 Módulo de bootstrap para configuração automática do ambiente.
 Verifica e cria o venv, instala dependências automaticamente.
+Quando rodando como executável PyInstaller, pula a criação de venv.
 """
 import subprocess
 import sys
@@ -8,8 +9,17 @@ import os
 from pathlib import Path
 
 
+def is_running_as_exe() -> bool:
+    """Verifica se está rodando como executável PyInstaller."""
+    # PyInstaller define esse atributo quando está rodando como .exe
+    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
+
+
 def get_project_root() -> Path:
     """Retorna o diretório raiz do projeto."""
+    if is_running_as_exe():
+        # Quando rodando como .exe, usa o diretório do executável
+        return Path(sys.executable).parent
     return Path(__file__).parent
 
 
@@ -127,9 +137,17 @@ def ensure_environment() -> bool:
     Garante que o ambiente está configurado corretamente.
     Cria venv e instala dependências se necessário.
     
+    Quando rodando como .exe (PyInstaller), pula a criação de venv
+    pois as dependências já estão empacotadas no executável.
+    
     Returns:
         True se o ambiente está pronto, False caso contrário.
     """
+    # Se está rodando como executável PyInstaller, não precisa de venv
+    # Todas as dependências já estão empacotadas no .exe
+    if is_running_as_exe():
+        return True
+    
     # Se já está no venv com dependências, tudo ok
     if is_running_in_venv() and check_dependencies_installed():
         return True

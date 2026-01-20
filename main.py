@@ -4,8 +4,8 @@ Sistema de Registro Automático de Pontos SSG
 import sys
 import traceback
 
-def pausar_antes_de_fechar():
-    """Pausa o console antes de fechar para que o usuário possa ver mensagens."""
+def pausar_em_caso_de_erro():
+    """Pausa o console antes de fechar apenas em caso de erro."""
     print("\n" + "=" * 50)
     input("Pressione ENTER para fechar...")
 
@@ -16,6 +16,7 @@ def main_wrapper():
         from bootstrap import ensure_environment
         if not ensure_environment():
             print("\n❌ Falha ao configurar ambiente.")
+            pausar_em_caso_de_erro()
             return 1
         
         # Executa main principal
@@ -24,6 +25,7 @@ def main_wrapper():
         print(f"\n❌ ERRO FATAL: {e}")
         print("\n--- Detalhes do erro ---")
         traceback.print_exc()
+        pausar_em_caso_de_erro()
         return 1
 
 # Imports após garantir ambiente (serão carregados dentro do main)
@@ -150,6 +152,7 @@ def main():
         
     except FileNotFoundError as e:
         print(f"❌ {e}")
+        pausar_em_caso_de_erro()
         return 1
     except Exception as e:
         try:
@@ -159,6 +162,7 @@ def main():
         print(f"❌ Erro: {e}")
         print("\n--- Detalhes do erro ---")
         traceback.print_exc()
+        pausar_em_caso_de_erro()
         return 1
     
     return 0
@@ -170,8 +174,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ ERRO CRÍTICO: {e}")
         traceback.print_exc()
+        pausar_em_caso_de_erro()
         codigo_saida = 1
-    finally:
-        pausar_antes_de_fechar()
     
     sys.exit(codigo_saida)

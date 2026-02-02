@@ -251,8 +251,8 @@ class ValidadorHorarios:
         
         Args:
             entrada: Horário de entrada.
-            saida_almoco: Horário de saída para almoço.
-            retorno_almoco: Horário de retorno do almoço.
+            saida_almoco: Horário de saída para almoço (pode ser vazio).
+            retorno_almoco: Horário de retorno do almoço (pode ser vazio).
             saida: Horário de saída.
             
         Returns:
@@ -263,12 +263,16 @@ class ValidadorHorarios:
                 partes = h.split(":")
                 return int(partes[0]) * 60 + int(partes[1])
             
-            # Período da manhã
-            manha = horario_para_minutos(saida_almoco) - horario_para_minutos(entrada)
-            # Período da tarde
-            tarde = horario_para_minutos(saida) - horario_para_minutos(retorno_almoco)
-            
-            return manha + tarde
+            # Verifica se tem horários de almoço
+            if saida_almoco and retorno_almoco:
+                # Período da manhã
+                manha = horario_para_minutos(saida_almoco) - horario_para_minutos(entrada)
+                # Período da tarde
+                tarde = horario_para_minutos(saida) - horario_para_minutos(retorno_almoco)
+                return manha + tarde
+            else:
+                # Registro simples: apenas entrada e saída
+                return horario_para_minutos(saida) - horario_para_minutos(entrada)
         except (ValueError, IndexError):
             return 0
     
@@ -284,11 +288,15 @@ class ValidadorHorarios:
         Se entrada ou retorno forem adiantados (+1min), a saída correspondente
         será compensada (+1min) para manter o mesmo total.
         
+        Suporta registros com ou sem almoço:
+        - Com almoço: 4 horários (entrada, saída almoço, retorno almoço, saída)
+        - Sem almoço: 2 horários (entrada, saída)
+        
         Args:
             data: Data do registro.
             entrada: Horário de entrada.
-            saida_almoco: Horário de saída para almoço.
-            retorno_almoco: Horário de retorno do almoço.
+            saida_almoco: Horário de saída para almoço (pode ser vazio).
+            retorno_almoco: Horário de retorno do almoço (pode ser vazio).
             saida: Horário de saída.
             
         Returns:
@@ -296,6 +304,9 @@ class ValidadorHorarios:
         """
         ajustes = []
         horarios_usados = []  # Horários já usados neste registro
+        
+        # Verifica se tem horários de almoço
+        tem_almoco = bool(saida_almoco and retorno_almoco)
         
         # Calcula total de minutos trabalhados ORIGINAL (antes de qualquer ajuste)
         minutos_originais = self._calcular_minutos_trabalhados(entrada, saida_almoco, retorno_almoco, saida)
@@ -311,21 +322,23 @@ class ValidadorHorarios:
         ajustes.extend(ajustes_entrada)
         horarios_usados.append(entrada)
         
-        # 2. Ajusta saída almoço
-        saida_almoco, ajustes_saida_almoco = self._ajustar_horario_completo(data, saida_almoco, horarios_usados, "Saída almoço")
-        ajustes.extend(ajustes_saida_almoco)
-        horarios_usados.append(saida_almoco)
-        
-        # 3. Ajusta retorno almoço (primeiro verifica almoço 1h exata)
-        retorno_almoco_adj, adj_almoco = self._ajustar_almoco_1_hora(saida_almoco, retorno_almoco)
-        if adj_almoco:
-            ajustes.append(f"Retorno almoço: {retorno_almoco} → {retorno_almoco_adj} (almoço 1h exata)")
-        retorno_almoco = retorno_almoco_adj
-        
-        # Depois verifica redondo/duplicado
-        retorno_almoco, ajustes_retorno = self._ajustar_horario_completo(data, retorno_almoco, horarios_usados, "Retorno almoço")
-        ajustes.extend(ajustes_retorno)
-        horarios_usados.append(retorno_almoco)
+        # Processamento de horários de almoço (apenas se existirem)
+        if tem_almoco:
+            # 2. Ajusta saída almoço
+            saida_almoco, ajustes_saida_almoco = self._ajustar_horario_completo(data, saida_almoco, horarios_usados, "Saída almoço")
+            ajustes.extend(ajustes_saida_almoco)
+            horarios_usados.append(saida_almoco)
+            
+            # 3. Ajusta retorno almoço (primeiro verifica almoço 1h exata)
+            retorno_almoco_adj, adj_almoco = self._ajustar_almoco_1_hora(saida_almoco, retorno_almoco)
+            if adj_almoco:
+                ajustes.append(f"Retorno almoço: {retorno_almoco} → {retorno_almoco_adj} (almoço 1h exata)")
+            retorno_almoco = retorno_almoco_adj
+            
+            # Depois verifica redondo/duplicado
+            retorno_almoco, ajustes_retorno = self._ajustar_horario_completo(data, retorno_almoco, horarios_usados, "Retorno almoço")
+            ajustes.extend(ajustes_retorno)
+            horarios_usados.append(retorno_almoco)
         
         # 4. Calcula compensação necessária para manter total de horas
         # Calcula minutos trabalhados com os ajustes feitos (sem ajustar saída ainda)
@@ -348,8 +361,8 @@ class ValidadorHorarios:
         ajustes.extend(ajustes_saida)
         horarios_usados.append(saida)
         
-        # Se saída foi ajustada por redondo/duplicado, compensa no retorno do almoço
-        if saida != saida_antes_ajuste:
+        # Se saída foi ajustada por redondo/duplicado, compensa no retorno do almoço (apenas se tiver almoço)
+        if tem_almoco and saida != saida_antes_ajuste:
             # Calcula quantos minutos a saída avançou
             minutos_avancados_saida = self._diferenca_minutos(saida_antes_ajuste, saida)
             

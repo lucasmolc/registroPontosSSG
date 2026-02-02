@@ -22,17 +22,31 @@ class RegistroPonto:
     observacao: str = ""
     
     def __str__(self) -> str:
-        return f"Ponto {self.data}: {self.entrada} - {self.saida_almoco} | {self.retorno_almoco} - {self.saida}"
+        if self.tem_almoco():
+            return f"Ponto {self.data}: {self.entrada} - {self.saida_almoco} | {self.retorno_almoco} - {self.saida}"
+        return f"Ponto {self.data}: {self.entrada} - {self.saida}"
+    
+    def tem_almoco(self) -> bool:
+        """Verifica se o registro tem horários de almoço preenchidos."""
+        return bool(self.saida_almoco and self.retorno_almoco)
     
     def is_valido(self) -> bool:
-        """Verifica se o registro tem todos os horários preenchidos."""
-        return all([
-            self.data,
-            self.entrada,
-            self.saida_almoco,
-            self.retorno_almoco,
-            self.saida
-        ])
+        """
+        Verifica se o registro tem os horários mínimos preenchidos.
+        
+        Aceita dois formatos:
+        - Completo: entrada, saída almoço, retorno almoço, saída (4 horários)
+        - Simples: apenas entrada e saída (2 horários)
+        """
+        # Sempre precisa de data, entrada e saída
+        if not all([self.data, self.entrada, self.saida]):
+            return False
+        
+        # Se tem almoço parcial (só um dos dois), é inválido
+        if bool(self.saida_almoco) != bool(self.retorno_almoco):
+            return False
+        
+        return True
 
 
 class LeitorPontos:

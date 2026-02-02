@@ -584,10 +584,18 @@ class AutomacaoSSG:
             
             # 4. Monta lista de pares de horários (entrada, saída) para preencher
             # Cada par de horário representa uma linha E-S
-            pares_horarios = [
-                (registro_ajustado.entrada, registro_ajustado.saida_almoco),
-                (registro_ajustado.retorno_almoco, registro_ajustado.saida)
-            ]
+            # Verifica se tem almoço (4 horários) ou apenas entrada/saída (2 horários)
+            if registro_ajustado.saida_almoco and registro_ajustado.retorno_almoco:
+                # Registro completo com almoço
+                pares_horarios = [
+                    (registro_ajustado.entrada, registro_ajustado.saida_almoco),
+                    (registro_ajustado.retorno_almoco, registro_ajustado.saida)
+                ]
+            else:
+                # Registro simples: apenas entrada e saída (sem almoço)
+                pares_horarios = [
+                    (registro_ajustado.entrada, registro_ajustado.saida)
+                ]
             
             # Dropdown para adicionar registros E-S adicionais
             xpath_dropdown = f'//*[@id="TableTimesheet"]/tbody/tr[{idx_linha}]/td[1]/div/div/button'
@@ -716,8 +724,8 @@ class AutomacaoSSG:
         
         Args:
             entrada: Horário de entrada (HH:MM)
-            saida_almoco: Horário de saída para almoço (HH:MM)
-            retorno_almoco: Horário de retorno do almoço (HH:MM)
+            saida_almoco: Horário de saída para almoço (HH:MM) - pode ser vazio
+            retorno_almoco: Horário de retorno do almoço (HH:MM) - pode ser vazio
             saida: Horário de saída (HH:MM)
             
         Returns:
@@ -728,14 +736,19 @@ class AutomacaoSSG:
                 h, m = map(int, horario.split(':'))
                 return h * 60 + m
             
-            # Período da manhã
-            minutos_manha = horario_para_minutos(saida_almoco) - horario_para_minutos(entrada)
-            
-            # Período da tarde
-            minutos_tarde = horario_para_minutos(saida) - horario_para_minutos(retorno_almoco)
-            
-            # Total
-            total_minutos = minutos_manha + minutos_tarde
+            # Verifica se tem horários de almoço
+            if saida_almoco and retorno_almoco:
+                # Período da manhã
+                minutos_manha = horario_para_minutos(saida_almoco) - horario_para_minutos(entrada)
+                
+                # Período da tarde
+                minutos_tarde = horario_para_minutos(saida) - horario_para_minutos(retorno_almoco)
+                
+                # Total
+                total_minutos = minutos_manha + minutos_tarde
+            else:
+                # Registro simples: apenas entrada e saída
+                total_minutos = horario_para_minutos(saida) - horario_para_minutos(entrada)
             
             horas = total_minutos // 60
             minutos = total_minutos % 60

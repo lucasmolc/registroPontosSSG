@@ -35,7 +35,7 @@ def main():
     from loguru import logger
     from config import Settings
     from src.logger_config import configurar_logger
-    from src.leitor_pontos import LeitorPontos
+    from src.leitor_pontos import LeitorPontos, detectar_mes_registros
     from src.automacao_ssg import AutomacaoSSG
     
     print("\n🚀 Registro Automático de Pontos SSG\n")
@@ -78,8 +78,12 @@ def main():
             print("⚠️  Nenhum registro encontrado no arquivo.")
             sys.exit(0)
         
+        # Detecta se os registros são do mês atual ou mês passado
+        periodo = detectar_mes_registros(registros)
+        label_periodo = "mês passado" if periodo == "mes_passado" else "mês atual"
+        
         # Exibe registros
-        print(f"📅 {len(registros)} registro(s) a processar:\n")
+        print(f"📅 {len(registros)} registro(s) a processar ({label_periodo}):\n")
         for i, registro in enumerate(registros, 1):
             print(f"   {i}. {registro}")
         print()
@@ -93,9 +97,9 @@ def main():
                 sys.exit(1)
             print("✅ Login OK\n")
             
-            # Seleciona mês atual
-            print("📆 Filtrando por mês atual...")
-            automacao.selecionar_mes_atual_e_filtrar()
+            # Seleciona período conforme as datas do arquivo
+            print(f"📆 Filtrando por {label_periodo}...")
+            automacao.selecionar_mes_e_filtrar(periodo)
             
             # Obtém datas já cadastradas
             print("🔍 Verificando datas já cadastradas...")
@@ -105,7 +109,7 @@ def main():
             if datas_existentes:
                 print(f"   ⚠️  {len(datas_existentes)} data(s) já cadastrada(s): {', '.join(sorted(datas_existentes))}")
             else:
-                print("   ✅ Nenhuma data cadastrada no mês atual")
+                print(f"   ✅ Nenhuma data cadastrada no {label_periodo}")
             
             # Processa cada registro
             sucessos = 0

@@ -364,17 +364,21 @@ class AutomacaoSSG:
             logger.error(f"Erro ao realizar login: {e}")
             return False
     
-    def selecionar_mes_atual_e_filtrar(self) -> bool:
+    def selecionar_mes_e_filtrar(self, periodo: str = "mes_atual") -> bool:
         """
-        Seleciona o mês atual e clica em filtrar.
+        Seleciona o período (mês atual ou mês passado) e clica em filtrar.
+        
+        Args:
+            periodo: "mes_atual" para mês atual (li[1]) ou "mes_passado" para mês passado (li[2]).
         
         Returns:
             True se a operação foi bem sucedida, False caso contrário.
         """
         if not self.settings.selecionar_mes_atual:
             return True
-            
-        logger.info("Selecionando mês atual e filtrando...")
+        
+        label_periodo = "mês passado" if periodo == "mes_passado" else "mês atual"
+        logger.info(f"Selecionando {label_periodo} e filtrando...")
         
         try:
             # Aguarda página carregar
@@ -385,10 +389,13 @@ class AutomacaoSSG:
             dropdown_periodo.wait_for(state="visible", timeout=10000)
             dropdown_periodo.click()
             
-            # 2. Seleciona a opção "Mês Atual"
-            opcao_mes_atual = self.page.locator('xpath=/html/body/div[3]/div[2]/div[2]/div[3]/div/div/div/ul/li[1]/a')
-            opcao_mes_atual.wait_for(state="visible", timeout=5000)
-            opcao_mes_atual.click()
+            # 2. Seleciona a opção conforme o período
+            # li[1] = Mês Atual, li[2] = Mês Passado
+            indice_opcao = 2 if periodo == "mes_passado" else 1
+            xpath_opcao = f'xpath=/html/body/div[3]/div[2]/div[2]/div[3]/div/div/div/ul/li[{indice_opcao}]/a'
+            opcao_periodo = self.page.locator(xpath_opcao)
+            opcao_periodo.wait_for(state="visible", timeout=5000)
+            opcao_periodo.click()
             
             # 3. Clica no botão Pesquisar
             botao_pesquisar = self.page.locator('#ButtonSearch')
@@ -398,11 +405,11 @@ class AutomacaoSSG:
             # Aguarda resultados carregarem
             self.page.wait_for_load_state("networkidle")
             
-            logger.info("Mês atual selecionado e filtrado")
+            logger.info(f"{label_periodo.capitalize()} selecionado e filtrado")
             return True
             
         except Exception as e:
-            logger.error(f"Erro ao selecionar mês atual: {e}")
+            logger.error(f"Erro ao selecionar {label_periodo}: {e}")
             return False
     
     def obter_datas_cadastradas(self) -> Set[str]:

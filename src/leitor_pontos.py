@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, date, time
 
 import pandas as pd
 from loguru import logger
@@ -47,6 +47,50 @@ class RegistroPonto:
             return False
         
         return True
+
+
+def detectar_mes_registros(registros: List[RegistroPonto]) -> str:
+    """
+    Detecta se os registros são do mês atual ou do mês passado.
+
+    Analisa as datas dos registros e compara com a data atual.
+
+    Args:
+        registros: Lista de registros de ponto.
+
+    Returns:
+        "mes_passado" se a maioria dos registros for do mês anterior,
+        "mes_atual" caso contrário.
+    """
+    if not registros:
+        return "mes_atual"
+
+    hoje = date.today()
+    contagem_mes_passado = 0
+    contagem_mes_atual = 0
+
+    for registro in registros:
+        try:
+            data_registro = datetime.strptime(registro.data, "%d/%m/%Y").date()
+            if data_registro.year == hoje.year and data_registro.month == hoje.month:
+                contagem_mes_atual += 1
+            elif (
+                (data_registro.year == hoje.year and data_registro.month == hoje.month - 1)
+                or (hoje.month == 1 and data_registro.year == hoje.year - 1 and data_registro.month == 12)
+            ):
+                contagem_mes_passado += 1
+        except ValueError:
+            logger.warning(f"Data inválida no registro: {registro.data}")
+            continue
+
+    if contagem_mes_passado > 0 and contagem_mes_passado >= contagem_mes_atual:
+        logger.info(
+            f"Registros do mês passado detectados ({contagem_mes_passado} de {len(registros)})"
+        )
+        return "mes_passado"
+
+    logger.info(f"Registros do mês atual detectados ({contagem_mes_atual} de {len(registros)})")
+    return "mes_atual"
 
 
 class LeitorPontos:

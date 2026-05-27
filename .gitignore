@@ -225,3 +225,86 @@ logs/
 # Virtual Environment
 venv/
 .venv/
+# ===========================================
+# .NET / WPF (dotnet/ subproject)
+# ===========================================
+**/bin/
+**/obj/
+**/publish/
+*.user
+*.suo
+.vs/
+.idea/
+*.pdb
+*.exe.config
+
+# Distribuição (.zip do executável .NET)
+dist-dotnet/
+*.zip
+
+# ===========================================
+# Segurança: nunca commitar segredos/credenciais
+# ===========================================
+# Configs do usuário (.NET grava em %APPDATA% e o Python lê de config/config.yaml)
+**/RegistroPontosSSG/config.json
+config/config.yaml
+config/config.local.yaml
+config/secrets.yaml
+
+# Arquivos pessoais de pontos
+data/pontos/*.xlsx
+data/pontos/*.xls
+data/pontos/*.csv
+!data/pontos/.gitkeep
+
+# QR codes / chaves TOTP exportadas
+*.totp
+qr_*.png
+qr_*.jpg
+secret_*.txt
+
+# Backups locais
+*.bak
+*.backup
+
+# ===========================================
+# .NET / WPF (dotnet/ subproject)
+# ===========================================
+**/bin/
+**/obj/
+**/publish/
+*.user
+*.suo
+.vs/
+.idea/
+*.pdb
+*.exe.config
+
+# Distribuição (.zip do executável .NET)
+dist-dotnet/
+*.zip
+
+# ===========================================
+# Segurança: nunca commitar segredos/credenciais
+# ===========================================
+# Configs do usuário (.NET grava em %APPDATA% e o Python lê de config/config.yaml)
+**/RegistroPontosSSG/config.json
+config/config.yaml
+config/config.local.yaml
+config/secrets.yaml
+
+# Arquivos pessoais de pontos
+data/pontos/*.xlsx
+data/pontos/*.xls
+data/pontos/*.csv
+!data/pontos/.gitkeep
+
+# QR codes / chaves TOTP exportadas
+*.totp
+qr_*.png
+qr_*.jpg
+secret_*.txt
+
+# Backups locais
+*.bak
+*.backup

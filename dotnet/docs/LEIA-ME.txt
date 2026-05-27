@@ -1,0 +1,75 @@
+============================================================
+  REGISTRO AUTOMÁTICO DE PONTOS SSG — INSTRUÇÕES RÁPIDAS
+============================================================
+
+O QUE É?
+--------
+Aplicativo que registra automaticamente seus pontos no SSG
+da Sysmap a partir de uma planilha Excel.
+
+COMO USAR (primeira vez):
+-------------------------
+
+1. ABRA o programa com duplo-clique em "RegistroPontosSSG.exe"
+
+2. ABA "🔐 CREDENCIAIS"
+   - Preencha seu USUÁRIO do SSG (geralmente início do e-mail)
+   - Preencha sua SENHA
+   - (Opcional) Clique em "Configurar 2FA" para preenchimento
+     automático do código do Authenticator. Você precisará da
+     imagem do QR code que apareceu quando configurou o 2FA.
+     Se não tiver, deixe em branco — o programa abre o navegador
+     e você digita o código manualmente.
+
+3. ABA "📂 ARQUIVO DE PONTOS"
+   - Clique em "📁 Selecionar arquivo..." e escolha sua planilha
+     (.xlsx, .csv ou relatório exportado do próprio SSG)
+   - Confira os horários carregados na tabela
+
+4. ABA "⚙️ REGRAS"
+   - Deixe as opções padrão na primeira vez
+   - Clique em "💾 Salvar configurações"
+
+5. ABA "▶️ EXECUTAR"
+   - Clique em "🚀 Executar registro"
+   - O navegador abrirá automaticamente
+   - Acompanhe o progresso na janela preta
+   - Quando aparecer "✅ Apontamentos salvos!", clique em OK
+     no modal do navegador
+
+PRÓXIMAS EXECUÇÕES:
+-------------------
+Suas configurações ficam salvas. Basta:
+  - Abrir o programa
+  - Trocar o arquivo na aba "Arquivo de Pontos"
+  - Ir na aba "Executar" e clicar em "🚀 Executar registro"
+
+SEGURANÇA:
+----------
+- Sua senha e o secret do 2FA são CRIPTOGRAFADOS pelo Windows
+  e só funcionam na sua conta de usuário. Se você fizer login
+  com outra conta Windows, precisará configurar de novo.
+- Nada é enviado para a internet exceto o login no próprio SSG.
+
+PROBLEMAS COMUNS:
+-----------------
+"Não consegui ler o arquivo"
+  → Confira se é Excel (.xlsx) ou CSV. PDF não é suportado.
+
+"Falha no login"
+  → Confira usuário/senha. Tente entrar no SSG pelo navegador
+    normalmente para garantir que estão corretos.
+
+"O Cloudflare bloqueou"
+  → Vá em "Regras" e marque "Usar Chrome instalado no sistema"
+    (instale o Google Chrome antes, se não tiver).
+
+"Travou na primeira execução"
+  → Na 1ª vez o programa baixa o navegador (≈150MB). Aguarde
+    alguns minutos.
+
+PRECISA DE AJUDA?
+-----------------
+Contate o responsável que distribuiu o programa.
+
+============================================================

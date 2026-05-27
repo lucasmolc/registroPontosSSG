@@ -1,6 +1,44 @@
 # Sistema de Registro Automático de Pontos SSG
 
-Sistema em Python para leitura automática de arquivos de pontos (Excel/CSV) e registro automático no sistema SSG da Sysmap.
+Automação para leitura de arquivos de pontos (Excel/CSV) e registro automático no sistema SSG da Sysmap.
+
+O repositório contém **duas implementações** equivalentes da mesma automação:
+
+| Implementação | Pasta | Stack | Distribuição |
+| ------------- | ----- | ----- | ------------ |
+| **Python (CLI)** | raiz do repo (`main.py`, `src/`) | Python 3.10+ · Playwright · pandas | Script ou `.exe` via PyInstaller |
+| **Desktop (.NET / WPF)** | [`dotnet/`](./dotnet/) | .NET 10 · WPF · Playwright .NET | `.exe` self-contained (single-file) |
+
+Ambas executam o mesmo fluxo (login → 2FA → leitura do arquivo → validação → registro no SSG). Escolha:
+
+- **Python** — se você é desenvolvedor, quer rodar via terminal ou customizar regras
+- **.NET Desktop** — para distribuir um `.exe` único aos usuários finais (sem instalar Python)
+
+> 🔒 **Segurança:** o `.gitignore` impede o commit de credenciais (`config/config.yaml`, `%APPDATA%\RegistroPontosSSG\config.json`), arquivos pessoais de pontos (`data/pontos/*.xlsx`), QR codes, secrets TOTP e binários (`bin/`, `obj/`, `publish/`, `*.zip`).
+
+## 🖥️ Versão Desktop (.NET / WPF)
+
+Aplicativo Windows nativo com interface moderna em tema escuro, distribuído como `.exe` único self-contained (~96 MB — não requer .NET instalado na máquina do usuário).
+
+```powershell
+cd dotnet
+dotnet build
+dotnet run --project src\RegistroPontosSSG.Desktop
+```
+
+Publicar `.exe` único:
+
+```powershell
+cd dotnet
+dotnet publish src\RegistroPontosSSG.Desktop\RegistroPontosSSG.Desktop.csproj `
+    -c Release -r win-x64 --self-contained true -o publish
+```
+
+Detalhes completos (design system, arquitetura MVVM, DPAPI, etc.) em [`dotnet/README.md`](./dotnet/README.md) e [`dotnet/docs/design-system.md`](./dotnet/docs/design-system.md).
+
+---
+
+## 🐍 Versão Python (CLI)
 
 ## ✨ Funcionalidades
 

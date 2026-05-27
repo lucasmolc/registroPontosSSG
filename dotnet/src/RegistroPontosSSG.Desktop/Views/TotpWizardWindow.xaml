@@ -1,0 +1,104 @@
+﻿<Window x:Class="RegistroPontosSSG.Desktop.Views.TotpWizardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configurar 2FA Automático"
+        Height="600" Width="640" MinHeight="500" MinWidth="520"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource Bg}"
+        UseLayoutRounding="True">
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Width="40" Height="40" CornerRadius="10"
+                    Background="{StaticResource AccentSubtle}" VerticalAlignment="Center">
+                <TextBlock Text="🔐" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="Configurar 2FA Automático" Style="{StaticResource Display}" FontSize="18"/>
+                <TextBlock Style="{StaticResource Subtitle}" Margin="0,2,0,0">
+                    Forneça o QR code do SSG (imagem) ou a secret key em Base32.
+                </TextBlock>
+            </StackPanel>
+        </Grid>
+
+        <!-- Tabs -->
+        <TabControl Grid.Row="1">
+            <TabItem Header="📷  Ler do QR Code">
+                <Border Style="{StaticResource SubCard}" Margin="20,16">
+                    <StackPanel>
+                        <TextBlock Text="Como obter a imagem" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="1. Capture um print da tela com o QR code (PrintScreen, Win+Shift+S)" Margin="0,2"/>
+                        <TextBlock Text="2. Salve como PNG ou JPG em qualquer pasta" Margin="0,2"/>
+                        <TextBlock Text="3. Selecione abaixo o arquivo de imagem" Margin="0,2,0,16"/>
+
+                        <Button Content="🖼️  Selecionar imagem do QR..." Click="BrowseQr_Click" HorizontalAlignment="Left"/>
+
+                        <Border x:Name="QrResultPanel" Background="{StaticResource Bg}"
+                                BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8"
+                                Padding="14" Margin="0,16,0,0" Visibility="Collapsed">
+                            <TextBlock x:Name="QrResultLabel" TextWrapping="Wrap" Foreground="{StaticResource Text}"/>
+                        </Border>
+
+                        <TextBlock Foreground="{StaticResource Warning}" TextWrapping="Wrap" Margin="0,16,0,0" FontSize="11">
+                            ⚠ Após configurar com sucesso, apague a imagem do QR code do computador.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+            <TabItem Header="⌨️  Digitar Secret">
+                <Border Style="{StaticResource SubCard}" Margin="20,16">
+                    <StackPanel>
+                        <TextBlock Text="Cole a secret key" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Style="{StaticResource Hint}" Margin="0,-8,0,12">
+                            É a parte após "secret=" na URL otpauth do QR code. Apenas caracteres Base32 (A–Z, 2–7).
+                        </TextBlock>
+
+                        <TextBlock Text="SECRET" Style="{StaticResource Label}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <PasswordBox Grid.Column="0" x:Name="SecretPasswordBox"
+                                         FontFamily="{StaticResource FontMono}"
+                                         PasswordChanged="SecretPasswordBox_PasswordChanged"/>
+                            <TextBox Grid.Column="0" x:Name="SecretBox"
+                                     FontFamily="{StaticResource FontMono}"
+                                     Visibility="Collapsed"
+                                     TextChanged="SecretBox_TextChanged"/>
+                            <Button Grid.Column="1" x:Name="ToggleSecretButton"
+                                    Content="👁" Width="40" Margin="6,0,0,0"
+                                    ToolTip="Mostrar/ocultar secret"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="ToggleSecret_Click"/>
+                        </Grid>
+                        <TextBlock Text="Exemplo: JBSWY3DPEHPK3PXP" Style="{StaticResource Hint}"/>
+
+                        <Border x:Name="ManualResultPanel" Background="{StaticResource Bg}"
+                                BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8"
+                                Padding="14" Margin="0,8,0,0" Visibility="Collapsed">
+                            <TextBlock x:Name="ManualResultLabel" TextWrapping="Wrap" Foreground="{StaticResource Text}"/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+        </TabControl>
+
+        <!-- Footer -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button Content="Cancelar" Click="Cancel_Click" Style="{StaticResource SecondaryButton}" Margin="0,0,10,0"/>
+            <Button x:Name="OkButton" Content="Salvar" Click="Ok_Click" IsEnabled="False"/>
+        </StackPanel>
+    </Grid>
+</Window>

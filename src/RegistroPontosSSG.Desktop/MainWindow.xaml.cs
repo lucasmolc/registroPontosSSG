@@ -16,14 +16,37 @@ public partial class MainWindow : Window
         Loaded += OnLoaded;
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainViewModel vm && !string.IsNullOrEmpty(vm.Password))
+        if (DataContext is not MainViewModel vm) return;
+
+        if (!string.IsNullOrEmpty(vm.Password))
         {
             _syncing = true;
             PasswordBox.Password = vm.Password;
             PasswordTextBox.Text = vm.Password;
             _syncing = false;
+        }
+
+        // Novidades da versão (se acabou de atualizar) e verificação de nova release.
+        // Falhas aqui não devem impedir o uso do aplicativo.
+        try
+        {
+            await vm.InitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            // Falha aqui não impede o uso do app, mas precisa deixar rastro:
+            // sem isso, um erro na verificação de atualização passa invisível.
+            try
+            {
+                var pasta = RegistroPontosSSG.Core.Configuration.ConfigService.LogsDirectory;
+                System.IO.Directory.CreateDirectory(pasta);
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(pasta, "inicializacao.log"),
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}{Environment.NewLine}");
+            }
+            catch { /* log é best-effort */ }
         }
     }
 

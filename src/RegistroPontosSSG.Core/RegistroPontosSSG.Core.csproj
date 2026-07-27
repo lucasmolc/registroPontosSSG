@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -7,6 +7,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RegistroPontosSSG.Core</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Permite que os testes exercitem membros internos (validacao do download e
+         geracao do script de troca do executavel), sem torna-los API publica. -->
+    <InternalsVisibleTo Include="RegistroPontosSSG.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- O CHANGELOG.md da raiz é embutido no assembly para que o app mostre o resumo
+         da versão na primeira execução após atualizar, mesmo sem rede. O nome do
+         recurso fica "RegistroPontosSSG.Core.CHANGELOG.md" (ver ChangelogReader). -->
+    <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="RegistroPontosSSG.Core.CHANGELOG.md" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.105.0" />

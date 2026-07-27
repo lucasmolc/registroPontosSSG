@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using RegistroPontosSSG.Core.Models;
 using RegistroPontosSSG.Core.Security;
 
@@ -43,6 +43,27 @@ public sealed class ConfigService
         catch
         {
             return new AppConfig();
+        }
+    }
+
+    /// <summary>
+    /// Copia o config.json para config.backup.json e devolve o caminho da cópia.
+    /// Chamado antes de aplicar uma atualização: a troca do executável não toca no
+    /// %APPDATA%, mas a cópia protege contra qualquer falha durante o processo.
+    /// Devolve null se ainda não existe configuração salva.
+    /// </summary>
+    public static string? BackupConfig()
+    {
+        try
+        {
+            if (!File.Exists(ConfigFilePath)) return null;
+            var backup = Path.Combine(ConfigDirectory, "config.backup.json");
+            File.Copy(ConfigFilePath, backup, overwrite: true);
+            return backup;
+        }
+        catch
+        {
+            return null;
         }
     }
 

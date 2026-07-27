@@ -13,8 +13,14 @@
         <vm:MainViewModel/>
     </Window.DataContext>
 
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolParaVisibilidade"/>
+    </Window.Resources>
+
     <Grid Margin="32,28">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <!-- faixa de aviso de nova versão -->
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -50,8 +56,39 @@
             </Border>
         </Grid>
 
+        <!-- ═════════ Aviso de nova versão ═════════ -->
+        <Border Grid.Row="1" Margin="0,0,0,18" CornerRadius="10" Padding="16,12"
+                Background="{StaticResource AccentSubtle}"
+                BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                Visibility="{Binding IsUpdateAvailable, Converter={StaticResource BoolParaVisibilidade}}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="🆕" FontSize="18" VerticalAlignment="Center"/>
+
+                <StackPanel Grid.Column="1" Margin="12,0,12,0" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding UpdateMessage}" Foreground="{StaticResource Text}"
+                               FontSize="13" TextWrapping="Wrap"/>
+                    <ProgressBar Height="6" Margin="0,8,0,0" Minimum="0" Maximum="100"
+                                 Value="{Binding UpdateProgress}"
+                                 Visibility="{Binding IsUpdating, Converter={StaticResource BoolParaVisibilidade}}"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="Ver notas" Style="{StaticResource GhostButton}"
+                            Command="{Binding OpenReleasePageCommand}" Margin="0,0,8,0"/>
+                    <!-- O comando ignora cliques repetidos enquanto o download roda. -->
+                    <Button Content="Atualizar agora" Command="{Binding InstallUpdateCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- ═════════ Tabs ═════════ -->
-        <TabControl Grid.Row="1">
+        <TabControl Grid.Row="2">
 
             <!-- ─── TAB 1: Credenciais ─── -->
             <TabItem Header="🔐  Credenciais">
@@ -302,8 +339,26 @@
         </TabControl>
 
         <!-- ═════════ Footer ═════════ -->
-        <TextBlock Grid.Row="2" Margin="0,16,0,0" Style="{StaticResource Hint}">
-            Configurações salvas em %APPDATA%\RegistroPontosSSG\config.json — senha e secret TOTP criptografadas via Windows DPAPI.
-        </TextBlock>
+        <Grid Grid.Row="3" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                       TextWrapping="Wrap">
+                Configurações salvas em %APPDATA%\RegistroPontosSSG\config.json — senha e secret TOTP criptografadas via Windows DPAPI.
+                Atualizar o aplicativo não afeta esses dados.
+            </TextBlock>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                <CheckBox Content="Verificar atualizações ao iniciar"
+                          IsChecked="{Binding CheckUpdatesOnStartup}" VerticalAlignment="Center"/>
+                <Button Content="Verificar agora" Style="{StaticResource GhostButton}" Margin="12,0,0,0"
+                        Command="{Binding CheckForUpdatesCommand}"/>
+                <TextBlock Text="{Binding AppVersionLabel}" Style="{StaticResource Hint}"
+                           Margin="12,0,0,0" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
     </Grid>
 </Window>

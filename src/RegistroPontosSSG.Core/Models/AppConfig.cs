@@ -13,6 +13,25 @@ public sealed class AppConfig
     public ValidationRules Validation { get; set; } = new();
     public AutomationConfig Automation { get; set; } = new();
     public SsgUrls Ssg { get; set; } = new();
+    public UpdateConfig Update { get; set; } = new();
+
+    /// <summary>
+    /// Versão que rodou na última vez. Usada para exibir o resumo de novidades na
+    /// primeira execução depois de uma atualização.
+    /// </summary>
+    public string LastRunVersion { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Verificação de novas versões publicadas no GitHub.
+/// </summary>
+public sealed class UpdateConfig
+{
+    /// <summary>Consultar as releases ao abrir o aplicativo.</summary>
+    public bool CheckOnStartup { get; set; } = true;
+
+    /// <summary>Repositório no formato "usuario/repositorio".</summary>
+    public string Repository { get; set; } = "lucasmolc/registroPontosSSG";
 }
 
 public sealed class CredentialsConfig

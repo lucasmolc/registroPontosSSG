@@ -9,6 +9,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\logo.ico</ApplicationIcon>
     <AssemblyName>RegistroPontosSSG</AssemblyName>
+    <!-- Versão do produto. O workflow de release sobrescreve com a tag
+         (-p:Version=1.3.0), então o executável publicado sabe qual versão é e
+         consegue se comparar com a última release do GitHub. -->
+    <Version>1.3.0</Version>
     <RootNamespace>RegistroPontosSSG.Desktop</RootNamespace>
     <!-- Single-file publish settings -->
     <PublishSingleFile>true</PublishSingleFile>

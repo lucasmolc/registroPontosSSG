@@ -8,6 +8,7 @@ using RegistroPontosSSG.Core.Configuration;
 using RegistroPontosSSG.Core.Models;
 using RegistroPontosSSG.Core.Reading;
 using RegistroPontosSSG.Core.Security;
+using RegistroPontosSSG.Core.Update;
 
 namespace RegistroPontosSSG.Desktop.ViewModels;
 
@@ -181,6 +182,192 @@ public sealed partial class MainViewModel : ObservableObject
         TotpStatus = string.IsNullOrWhiteSpace(Config.Credentials.TotpSecret)
             ? "Não configurado — você digitará o código 2FA no navegador"
             : "✓ Configurado — preenchimento automático ativo";
+    }
+
+
+    // ═════════════════════════ Atualização ═════════════════════════
+
+    [ObservableProperty] private bool _isUpdateAvailable;
+    [ObservableProperty] private string _updateMessage = string.Empty;
+    [ObservableProperty] private bool _isUpdating;
+    [ObservableProperty] private int _updateProgress;
+
+    private UpdateInfo? _pendingUpdate;
+
+    /// <summary>Versão em execução, exibida no rodapé.</summary>
+    public string AppVersionLabel => $"v{UpdateService.CurrentApplicationVersion.ToString(3)}";
+
+    public bool CheckUpdatesOnStartup
+    {
+        get => Config.Update.CheckOnStartup;
+        set
+        {
+            if (Config.Update.CheckOnStartup == value) return;
+            Config.Update.CheckOnStartup = value;
+            _configService.Save(Config);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// Executada quando a janela carrega: mostra as novidades se o app acabou de ser
+    /// atualizado e, se configurado, procura por uma versão mais recente.
+    /// </summary>
+    public async Task InitializeAsync()
+    {
+        ShowWhatsNewIfUpdated();
+
+        if (Config.Update.CheckOnStartup)
+            await CheckForUpdatesAsync(silencioso: true);
+    }
+
+    /// <summary>
+    /// Na primeira execução após uma atualização, exibe o resumo do CHANGELOG.
+    /// A versão que rodou por último fica no config, então o aviso aparece uma única vez.
+    /// </summary>
+    private void ShowWhatsNewIfUpdated()
+    {
+        var atual = UpdateService.CurrentApplicationVersion;
+        var anterior = Version.TryParse(Config.LastRunVersion, out var lida) ? lida : null;
+
+        try
+        {
+            var secoes = anterior is null
+                ? (ChangelogReader.ReadForVersion(atual) is { } unica
+                    ? new List<ChangelogSection> { unica }
+                    : new List<ChangelogSection>())
+                : atual > anterior
+                    ? ChangelogReader.ReadBetween(anterior, atual).ToList()
+                    : new List<ChangelogSection>();
+
+            if (secoes.Count > 0)
+            {
+                var janela = new Views.WhatsNewWindow(secoes, atual, anterior, Config.Update.Repository)
+                {
+                    Owner = Application.Current.MainWindow
+                };
+                janela.ShowDialog();
+            }
+        }
+        catch (Exception ex)
+        {
+            AddVerbose($"falha ao exibir novidades: {ex.Message}");
+        }
+
+        if (Config.LastRunVersion != atual.ToString())
+        {
+            Config.LastRunVersion = atual.ToString();
+            _configService.Save(Config);
+        }
+    }
+
+    [RelayCommand]
+    private async Task CheckForUpdates() => await CheckForUpdatesAsync(silencioso: false);
+
+    private async Task CheckForUpdatesAsync(bool silencioso)
+    {
+        try
+        {
+            using var servico = new UpdateService(Config.Update.Repository);
+
+            if (servico.IsDevelopmentBuild)
+            {
+                if (!silencioso)
+                    MessageBox.Show(
+                        "Esta é uma compilação local, sem número de versão — a verificação " +
+                        "de atualizações só funciona no executável publicado.",
+                        "Atualizações", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var info = await servico.CheckForUpdateAsync();
+            _pendingUpdate = info;
+            IsUpdateAvailable = info is not null;
+
+            if (info is not null)
+            {
+                UpdateMessage = $"Versão {info.Version.ToString(3)} disponível " +
+                                $"({info.SizeLabel}) — você está na {servico.CurrentVersion.ToString(3)}.";
+                AddLog($"🆕 {UpdateMessage}");
+            }
+            else if (!silencioso)
+            {
+                MessageBox.Show(
+                    $"Você já está na versão mais recente ({servico.CurrentVersion.ToString(3)}).",
+                    "Atualizações", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddVerbose($"falha ao verificar atualizações: {ex.Message}");
+            if (!silencioso)
+                MessageBox.Show($"Não foi possível verificar atualizações:\n\n{ex.Message}",
+                    "Atualizações", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Baixa a nova versão e agenda a troca do executável. As configurações ficam em
+    /// %APPDATA% e não são afetadas; ainda assim uma cópia de segurança é feita antes.
+    /// </summary>
+    [RelayCommand]
+    private async Task InstallUpdate()
+    {
+        if (_pendingUpdate is null || IsUpdating) return;
+
+        var resposta = MessageBox.Show(
+            $"Baixar e instalar a versão {_pendingUpdate.Version.ToString(3)} ({_pendingUpdate.SizeLabel})?\n\n" +
+            "O aplicativo será fechado e reaberto automaticamente ao final.\n" +
+            "Suas configurações são preservadas: ficam em %APPDATA%\\RegistroPontosSSG, " +
+            "fora da pasta do executável.",
+            "Atualizar aplicativo", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (resposta != MessageBoxResult.Yes) return;
+
+        try
+        {
+            IsUpdating = true;
+            UpdateProgress = 0;
+            Status = "Baixando atualização...";
+
+            var backup = ConfigService.BackupConfig();
+            AddVerbose(backup is null
+                ? "sem config salvo para copiar"
+                : $"cópia de segurança do config: {backup}");
+
+            using var servico = new UpdateService(Config.Update.Repository);
+            var progresso = new Progress<int>(p => UpdateProgress = p);
+            var caminho = await servico.DownloadAsync(_pendingUpdate, progresso);
+
+            AddLog("✅ Download concluído — substituindo o executável e reabrindo...");
+            UpdateService.ApplyAndRestart(caminho);
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            IsUpdating = false;
+            Status = "Falha ao atualizar";
+            AddLog($"❌ Falha ao atualizar: {ex.Message}");
+            MessageBox.Show(
+                $"Não foi possível concluir a atualização:\n\n{ex.Message}\n\n" +
+                "Você pode baixar a nova versão manualmente pela página de releases.",
+                "Atualização", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenReleasePage()
+    {
+        var url = _pendingUpdate?.ReleaseUrl is { Length: > 0 } releaseUrl
+            ? releaseUrl
+            : $"https://github.com/{Config.Update.Repository}/releases";
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AddVerbose($"falha ao abrir o navegador: {ex.Message}");
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanExecute))]

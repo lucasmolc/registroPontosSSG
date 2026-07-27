@@ -36,6 +36,7 @@ registroPontosSSG/
 ├── src/
 │   ├── RegistroPontosSSG.Core/          # Lógica reutilizável, sem UI
 │   │   ├── Automation/                  # SsgAutomation + SsgSelectors (Playwright)
+│   │   ├── Update/                      # Verificação de releases e changelog
 │   │   ├── Configuration/               # ConfigService (%APPDATA%)
 │   │   ├── Models/                      # AppConfig, PunchRecord, ValidationRules
 │   │   ├── Reading/                     # PunchFileReader (Excel/CSV/relatório SSG)
@@ -46,6 +47,7 @@ registroPontosSSG/
 │       ├── ViewModels/                  # MainViewModel
 │       ├── Views/                       # Wizard de 2FA, log verboso
 │       └── app.manifest                 # DPI awareness e nível de privilégio
+├── CHANGELOG.md                          # Lido pelo app na 1ª execução após atualizar
 ├── tests/
 │   └── RegistroPontosSSG.Core.Tests/    # xUnit: leitura de planilhas e regras de horário
 └── docs/
@@ -67,6 +69,8 @@ Diretórios gerados em tempo de execução ou build (`bin/`, `obj/`, `publish/`,
 - Preenchimento automático de Entrada/Saída com múltiplos pares por dia
 - Seleção automática de OSI/Projeto/Atividade
 - 2FA via TOTP (opcional), com wizard de leitura do QR code
+- Aviso de nova versão publicada no GitHub, com atualização automática do executável
+- Resumo do que mudou na primeira execução após atualizar
 - Log verboso por execução em `logs/run-<timestamp>.log`
 
 ## Requisitos
@@ -137,14 +141,52 @@ Dois detalhes que quebram a automação se ignorados:
 - O filtro **exige o preset de período**: digitar as datas nos campos mascarados faz o Angular
   responder "O campo Período é de preenchimento obrigatório".
 
+## Atualização do aplicativo
+
+Ao abrir, o app consulta a última release do repositório e, se houver versão mais nova,
+mostra uma faixa com o número da versão, o tamanho do download e dois botões: **Ver
+notas** e **Atualizar agora**. A verificação pode ser desligada no rodapé ("Verificar
+atualizações ao iniciar"); há também o botão **Verificar agora**.
+
+Ao confirmar, o app baixa o executável, valida o arquivo (tamanho informado pela API e
+assinatura de executável do Windows), fecha, substitui o `.exe` e reabre.
+
+**Suas configurações não são perdidas.** Elas ficam em `%APPDATA%\RegistroPontosSSG\`
+(`config.json`, `logs/`, `browser_data/`), fora da pasta do executável — a atualização
+troca apenas o `.exe`. Antes da troca, o app ainda copia o `config.json` para
+`config.backup.json`.
+
+Como a troca não pode ser feita pelo processo em execução (o Windows mantém o arquivo
+bloqueado), o app gera um script em `%LOCALAPPDATA%\RegistroPontosSSG\updates\` que
+aguarda o encerramento, copia o novo executável e reabre o aplicativo. O resultado fica
+em `atualizacao.log`, na mesma pasta. Se a cópia falhar — por exemplo, num diretório sem
+permissão de escrita —, o aplicativo antigo é reaberto e o motivo fica no log.
+
+Na primeira execução após atualizar, uma janela mostra o resumo do
+[`CHANGELOG.md`](CHANGELOG.md) das versões novas. O arquivo é embutido no executável,
+então o resumo aparece mesmo sem rede. Quem pula versões (da 1.1.0 direto para a 1.3.0)
+vê as entradas de todas elas.
+
+### Publicar uma versão
+
+```powershell
+git tag v1.3.0
+git push origin v1.3.0
+```
+
+O `release.yml` injeta a versão da tag no executável (`-p:Version=1.3.0`) e confere se
+ela foi gravada. Sem isso o app publicado não saberia se comparar com a última release.
+
 ## Testes
 
 ```powershell
 dotnet test
 ```
 
-20 testes em xUnit cobrindo `PunchFileReader` (relatório do SSG e planilha padrão) e
-`TimeValidator` (regras de ajuste). As planilhas de fixture são geradas em código com
+55 testes em xUnit cobrindo `PunchFileReader` (relatório do SSG e planilha padrão),
+`TimeValidator` (regras de ajuste), `UpdateService` (leitura das releases, validação do
+download e troca do executável), `ChangelogReader` e a separação entre configuração e
+executável. As planilhas de fixture são geradas em código com
 ClosedXML — o `.gitignore` bloqueia `*.xlsx` justamente para impedir o commit de
 arquivos de ponto pessoais.
 

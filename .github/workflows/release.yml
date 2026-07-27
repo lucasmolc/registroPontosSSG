@@ -39,9 +39,27 @@ jobs:
         run: dotnet test --configuration Release --no-build --verbosity normal
 
       - name: Publicar .exe self-contained
-        run: >
-          dotnet publish src/RegistroPontosSSG.Desktop/RegistroPontosSSG.Desktop.csproj
-          -c Release -r win-x64 --self-contained true -o publish
+        shell: pwsh
+        run: |
+          # A versão vem da tag: sem isso o executável publicado não sabe qual versão
+          # é e a verificação de atualização compara contra o número fixo do csproj.
+          $tag = if ('${{ github.event.inputs.tag }}') { '${{ github.event.inputs.tag }}' } else { '${{ github.ref_name }}' }
+          $versao = $tag.TrimStart('v')
+          Write-Host "publicando a versao $versao (tag $tag)"
+          dotnet publish src/RegistroPontosSSG.Desktop/RegistroPontosSSG.Desktop.csproj `
+            -c Release -r win-x64 --self-contained true -o publish -p:Version=$versao
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish falhou" }
+
+      - name: Conferir a versão gravada no executável
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event.inputs.tag }}') { '${{ github.event.inputs.tag }}' } else { '${{ github.ref_name }}' }
+          $esperada = $tag.TrimStart('v')
+          $gravada = (Get-Item 'publish/RegistroPontosSSG.exe').VersionInfo.ProductVersion
+          Write-Host "versao gravada: $gravada | esperada: $esperada"
+          if (-not $gravada.StartsWith($esperada)) {
+            throw "versao do executavel ($gravada) nao corresponde a tag ($esperada)"
+          }
 
       - name: Conferir o executável gerado
         shell: pwsh

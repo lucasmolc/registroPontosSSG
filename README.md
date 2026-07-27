@@ -47,6 +47,7 @@ registroPontosSSG/
 │       ├── ViewModels/                  # MainViewModel
 │       ├── Views/                       # Wizard de 2FA, log verboso
 │       └── app.manifest                 # DPI awareness e nível de privilégio
+├── CLAUDE.md                             # Instruções do projeto (política de release)
 ├── CHANGELOG.md                          # Lido pelo app na 1ª execução após atualizar
 ├── tests/
 │   └── RegistroPontosSSG.Core.Tests/    # xUnit: leitura de planilhas e regras de horário

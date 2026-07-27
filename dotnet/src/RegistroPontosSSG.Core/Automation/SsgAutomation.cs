@@ -1,16 +1,24 @@
-﻿using Microsoft.Playwright;
+using Microsoft.Playwright;
 using RegistroPontosSSG.Core.Models;
 using RegistroPontosSSG.Core.Security;
 using RegistroPontosSSG.Core.Validation;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 
 namespace RegistroPontosSSG.Core.Automation;
 
 /// <summary>
 /// Automação Playwright do sistema SSG (Sysmap).
-/// Porte fiel da implementação Python: login + 2FA TOTP + filtro de mês + registro de pontos.
+///
+/// Fluxo: login + 2FA TOTP → rota <c>#/access-entry/get-list</c> → filtro de período →
+/// preenchimento dos cards de dia (Registro de E-S + Apontamento) → "Salvar dias alterados".
+///
+/// A interface antiga (<c>timesheetrecording.asp</c> com <c>#TableTimesheet</c>) não existe mais:
+/// o SSG migrou para uma SPA AngularJS onde os cards de todos os dias do período já vêm
+/// renderizados — não é preciso criar linha nem digitar a data. Ver <see cref="SsgSelectors"/>.
 /// </summary>
 public sealed class SsgAutomation : IAsyncDisposable
 {
@@ -25,12 +33,20 @@ public sealed class SsgAutomation : IAsyncDisposable
     private IBrowserContext? _context;
     private IPage? _page;
     private Process? _chromeProcess;
+
+    /// <summary>
+    /// Texto de um OSI/Projeto/Atividade já usado pelo profissional, capturado dos dias
+    /// que já possuem apontamento. Serve de fallback para o autocomplete quando o modal
+    /// de "Listagem de Itens" não abre.
+    /// </summary>
+    private string? _knownProjectText;
+
     public HashSet<string> RegisteredDates { get; } = new();
+
     /// <summary>
     /// Horários (HH:mm) já cadastrados no SSG, agrupados por data DD/MM/YYYY.
-    /// Alimentado por <see cref="GetRegisteredDatesAsync"/> e usado para que a regra
-    /// de "duplicado em dias próximos" enxergue horários históricos que NÃO estão
-    /// no arquivo de entrada (caso típico: 17:26 do dia 19 já salvo no SSG).
+    /// Alimentado por <see cref="GetRegisteredDatesAsync"/> e usado para que a regra de
+    /// "duplicado em dias próximos" enxergue horários que NÃO estão no arquivo de entrada.
     /// </summary>
     public Dictionary<string, List<string>> RegisteredTimesByDate { get; } = new();
 
@@ -45,14 +61,14 @@ public sealed class SsgAutomation : IAsyncDisposable
 
     private void V(string message) => _verbose($"[{DateTime.Now:HH:mm:ss.fff}] {message}");
 
+    // ------------------------------------------------------------------
+    // Preenchimento de campos mascarados
+    // ------------------------------------------------------------------
+
     /// <summary>
-    /// Preenche um campo de hora com máscara HH:MM, tratando casos onde o site formata
-    /// automaticamente os dígitos (ex.: digitar "09:16" produzia "91:60" porque o ":"
-    /// digitado conflitava com a máscara). Estratégia:
-    /// 1) Foca e limpa via teclado (Ctrl+A + Delete) — FillAsync("") não limpa campos mascarados.
-    /// 2) Digita apenas os 4 dígitos, deixando a máscara aplicar ":" sozinha.
-    /// 3) Lê o valor de volta; se ficou diferente do esperado, tenta novamente
-    ///    com FillAsync direto (alguns campos aceitam HH:MM via fill).
+    /// Preenche um campo de hora com máscara HH:MM. Os campos <c>.mask-time</c> da SPA
+    /// ignoram <c>FillAsync</c> (o valor fica vazio ou "__:__"), por isso enviamos apenas
+    /// os 4 dígitos e deixamos a máscara aplicar o ":" sozinha.
     /// </summary>
     private async Task<bool> FillTimeFieldAsync(ILocator field, string time, string label)
     {
@@ -67,30 +83,11 @@ public sealed class SsgAutomation : IAsyncDisposable
     }
 
     /// <summary>
-    /// Preenche um campo de data com máscara DD/MM/YYYY. Mesma lógica do FillTimeFieldAsync:
-    /// envia somente os 8 dígitos e deixa a máscara aplicar as "/" automaticamente.
-    /// Em campos sem máscara, faz fallback para FillAsync com DD/MM/YYYY.
-    /// </summary>
-    private async Task<bool> FillDateFieldAsync(ILocator field, string date, string label)
-    {
-        var formatted = FormatDate(date);
-        var digits = new string(formatted.Where(char.IsDigit).ToArray());
-        if (digits.Length != 8)
-        {
-            V($"   {label}: ⚠️ valor '{date}' não possui 8 dígitos (esperado DD/MM/YYYY), abortando");
-            return false;
-        }
-        return await FillMaskedFieldAsync(field, digits, formatted, label);
-    }
-
-    /// <summary>
-    /// Núcleo do preenchimento de campos mascarados. Recebe os dígitos crus
-    /// (sem separadores) e o valor formatado esperado para validação.
+    /// Núcleo do preenchimento de campos mascarados: recebe os dígitos crus (sem
+    /// separadores) e o valor formatado esperado, usado para validar o resultado.
     /// </summary>
     private async Task<bool> FillMaskedFieldAsync(ILocator field, string digitsOnly, string expectedFormatted, string label)
     {
-        // Tentativa 1: limpar via teclado (triple-click seleciona conteúdo) + digitar só os dígitos.
-        // PressSequentially com Delay maior reduz casos onde a máscara perde caracteres.
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             await field.ClickAsync(new() { ClickCount = 3 });
@@ -103,20 +100,24 @@ public sealed class SsgAutomation : IAsyncDisposable
             if (v == expectedFormatted) return true;
         }
 
-        // Tentativa 3: FillAsync direto com o valor formatado completo
+        // Último recurso: alguns campos sem máscara aceitam o valor completo via fill.
         await field.FocusAsync();
         await field.PressAsync("Control+A");
         await field.PressAsync("Delete");
         await field.FillAsync(expectedFormatted);
         await field.PressAsync("Tab");
         await _page!.WaitForTimeoutAsync(150);
-        var v3 = (await field.InputValueAsync() ?? string.Empty).Trim();
-        V($"   {label}: tentativa 3 (fill='{expectedFormatted}') → campo='{v3}'");
-        if (v3 == expectedFormatted) return true;
+        var final = (await field.InputValueAsync() ?? string.Empty).Trim();
+        V($"   {label}: tentativa 3 (fill='{expectedFormatted}') → campo='{final}'");
+        if (final == expectedFormatted) return true;
 
-        V($"   {label}: ❌ valor final '{v3}' diferente do esperado '{expectedFormatted}'");
+        V($"   {label}: ❌ valor final '{final}' diferente do esperado '{expectedFormatted}'");
         return false;
     }
+
+    // ------------------------------------------------------------------
+    // Navegador
+    // ------------------------------------------------------------------
 
     public async Task StartAsync()
     {
@@ -147,7 +148,19 @@ public sealed class SsgAutomation : IAsyncDisposable
             : Configuration.ConfigService.BrowserDataDirectory;
         Directory.CreateDirectory(userDataDir);
 
+        // 1) Reaproveita um Chrome de debug já aberto (outra execução ou outro script
+        //    podem estar usando o mesmo perfil; subir um segundo Chrome sobre o mesmo
+        //    --user-data-dir faz o processo delegar para a instância existente e a porta
+        //    de debug nunca abre).
+        var existingPort = await FindRunningDebugPortAsync(userDataDir);
+        if (existingPort is int reusePort && await TryConnectAsync(reusePort, reused: true))
+            return;
+
+        // 2) Sobe uma instância nova
         var port = FindFreePort();
+        var devToolsFile = Path.Combine(userDataDir, "DevToolsActivePort");
+        try { if (File.Exists(devToolsFile)) File.Delete(devToolsFile); } catch { }
+
         var args = new List<string>
         {
             $"--remote-debugging-port={port}",
@@ -155,7 +168,8 @@ public sealed class SsgAutomation : IAsyncDisposable
             "--disable-background-networking", "--disable-client-side-phishing-detection",
             "--disable-default-apps", "--disable-hang-monitor", "--disable-popup-blocking",
             "--disable-prompt-on-repost", "--disable-sync", "--disable-translate",
-            "--metrics-recording-only", "--no-first-run", "--safebrowsing-disable-auto-update"
+            "--metrics-recording-only", "--no-first-run", "--no-default-browser-check",
+            "--safebrowsing-disable-auto-update"
         };
         if (!_config.Automation.UseChromeProfile)
             args.Add("--profile-directory=Default");
@@ -170,22 +184,146 @@ public sealed class SsgAutomation : IAsyncDisposable
             RedirectStandardError = true
         });
 
-        await Task.Delay(3000);
+        // Aguarda o endpoint responder de fato (em vez de um Task.Delay fixo).
+        var ready = await WaitForDebugEndpointAsync(port, TimeSpan.FromSeconds(30));
+        if (!ready)
+        {
+            // O Chrome pode ter escolhido outra porta e registrado em DevToolsActivePort.
+            var advertised = ReadDevToolsPort(userDataDir);
+            if (advertised is int p2 && await TryConnectAsync(p2, reused: false)) return;
 
-        try
-        {
-            _browser = await _playwright!.Chromium.ConnectOverCDPAsync($"http://localhost:{port}");
-            _context = _browser.Contexts.Count > 0 ? _browser.Contexts[0] : await _browser.NewContextAsync();
-            _page = _context.Pages.Count > 0 ? _context.Pages[0] : await _context.NewPageAsync();
-            _page.SetDefaultTimeout(_config.Automation.TimeoutMs);
-            _log("Conectado ao Chrome do sistema");
+            _log("Chrome não abriu a porta de debug — usando Chromium embutido");
+            try { _chromeProcess?.Kill(); } catch { }
+            await StartBundledChromiumAsync();
+            return;
         }
-        catch (Exception ex)
+
+        if (!await TryConnectAsync(port, reused: false))
         {
-            _log($"Erro ao conectar ao Chrome: {ex.Message}. Tentando Chromium embutido.");
+            _log("Falha ao conectar via CDP — usando Chromium embutido");
             try { _chromeProcess?.Kill(); } catch { }
             await StartBundledChromiumAsync();
         }
+    }
+
+    /// <summary>
+    /// Conecta via CDP. Usa sempre <c>127.0.0.1</c>: com "localhost" o Windows resolve
+    /// <c>::1</c> primeiro e o Chrome, que escuta apenas em IPv4, recusa a conexão
+    /// (<c>ECONNREFUSED ::1:porta</c>).
+    /// </summary>
+    private async Task<bool> TryConnectAsync(int port, bool reused)
+    {
+        try
+        {
+            _browser = await _playwright!.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}");
+            _context = _browser.Contexts.Count > 0 ? _browser.Contexts[0] : await _browser.NewContextAsync();
+            _page = _context.Pages.Count > 0 ? _context.Pages[0] : await _context.NewPageAsync();
+            _page.SetDefaultTimeout(_config.Automation.TimeoutMs);
+            _log(reused
+                ? $"Reutilizando Chrome de debug já aberto (porta {port})"
+                : $"Conectado ao Chrome do sistema (porta {port})");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            V($"TryConnectAsync(porta={port}) falhou: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Procura um Chrome de debug ativo: primeiro pela porta anunciada no
+    /// <c>DevToolsActivePort</c> do perfil, depois pelas portas presentes nas linhas de
+    /// comando dos processos chrome.exe em execução.
+    /// </summary>
+    private async Task<int?> FindRunningDebugPortAsync(string userDataDir)
+    {
+        var candidates = new List<int>();
+
+        if (ReadDevToolsPort(userDataDir) is int fromFile)
+            candidates.Add(fromFile);
+
+        foreach (var port in ReadDebugPortsFromProcesses())
+            if (!candidates.Contains(port)) candidates.Add(port);
+
+        foreach (var port in candidates)
+        {
+            if (await IsDebugEndpointAliveAsync(port))
+            {
+                V($"FindRunningDebugPortAsync: porta {port} respondendo");
+                return port;
+            }
+        }
+        V($"FindRunningDebugPortAsync: nenhuma porta de debug ativa (candidatas: {string.Join(", ", candidates)})");
+        return null;
+    }
+
+    private static int? ReadDevToolsPort(string userDataDir)
+    {
+        try
+        {
+            var file = Path.Combine(userDataDir, "DevToolsActivePort");
+            if (!File.Exists(file)) return null;
+            var first = File.ReadLines(file).FirstOrDefault();
+            return int.TryParse(first?.Trim(), out var port) ? port : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Extrai as portas de <c>--remote-debugging-port</c> das linhas de comando dos
+    /// processos chrome.exe. Cobre o caso de outro script já ter subido o Chrome com um
+    /// perfil diferente do nosso.
+    /// </summary>
+    private static IEnumerable<int> ReadDebugPortsFromProcesses()
+    {
+        var ports = new List<int>();
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell",
+                Arguments = "-NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='chrome.exe'\\\" | Select-Object -ExpandProperty CommandLine\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null) return ports;
+            var output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(15000);
+
+            foreach (Match m in Regex.Matches(output, @"--remote-debugging-port=(\d+)"))
+            {
+                if (int.TryParse(m.Groups[1].Value, out var port) && !ports.Contains(port))
+                    ports.Add(port);
+            }
+        }
+        catch { /* sem WMI/PowerShell: seguimos apenas com o DevToolsActivePort */ }
+        return ports;
+    }
+
+    private static async Task<bool> IsDebugEndpointAliveAsync(int port)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            var resp = await http.GetAsync($"http://127.0.0.1:{port}/json/version");
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
+    private static async Task<bool> WaitForDebugEndpointAsync(int port, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await IsDebugEndpointAliveAsync(port)) return true;
+            await Task.Delay(500);
+        }
+        return false;
     }
 
     private async Task StartBundledChromiumAsync()
@@ -213,6 +351,10 @@ public sealed class SsgAutomation : IAsyncDisposable
         _log("Chromium embutido iniciado");
     }
 
+    // ------------------------------------------------------------------
+    // Login
+    // ------------------------------------------------------------------
+
     public async Task<bool> LoginAsync()
     {
         if (_page is null) return false;
@@ -223,54 +365,61 @@ public sealed class SsgAutomation : IAsyncDisposable
             await _page.GotoAsync(_config.Ssg.BaseUrl + "/");
 
             _progress("Aguardando Cloudflare...");
-            V("LoginAsync: aguardando URL portal.sysmap.com.br ou wp-login (timeout 120s)");
-            await _page.WaitForURLAsync(url => url.Contains("portal.sysmap.com.br") || url.Contains("wp-login"), new() { Timeout = 120000 });
+            await _page.WaitForURLAsync(
+                url => url.Contains("portal.sysmap.com.br") || url.Contains("wp-login") || url.Contains("ssg.sysmap.com.br/index.html"),
+                new() { Timeout = 120000 });
             await _page.WaitForLoadStateAsync(LoadState.NetworkIdle);
             V($"LoginAsync: URL atual='{_page.Url}'");
 
-            _progress("Preenchendo credenciais...");
-            V($"LoginAsync: preenchendo #user_login com '{_config.Credentials.Username}'");
-            await _page.WaitForSelectorAsync("#user_login", new() { State = WaitForSelectorState.Visible, Timeout = 30000 });
-            await _page.Locator("#user_login").FillAsync(_config.Credentials.Username);
-            V($"LoginAsync: preenchendo #user_pass (len={_config.Credentials.Password.Length})");
-            await _page.Locator("#user_pass").FillAsync(_config.Credentials.Password);
+            var alreadyAuthenticated = _page.Url.Contains("ssg.sysmap.com.br")
+                                       || (_page.Url.Contains("portal.sysmap.com.br") && !_page.Url.Contains("wp-login"));
 
-            // 2FA
-            try
+            if (alreadyAuthenticated)
             {
-                await _page.WaitForSelectorAsync("#googleotp", new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
-                var totpField = _page.Locator("#googleotp");
-                await totpField.FocusAsync();
-
-                if (!string.IsNullOrWhiteSpace(_config.Credentials.TotpSecret))
-                {
-                    var code = TotpGenerator.GenerateCode(_config.Credentials.TotpSecret);
-                    _progress($"Preenchendo 2FA automaticamente: {code}");
-                    await totpField.FillAsync(code);
-                    await _page.WaitForTimeoutAsync(500);
-                    var submit = _page.Locator("input[type=\"submit\"], button[type=\"submit\"], input[name=\"wp-submit\"]").First;
-                    await submit.ClickAsync();
-                }
-                else
-                {
-                    _progress("Digite o código 2FA no navegador...");
-                }
+                V("LoginAsync: sessão já autenticada — pulando formulário");
             }
-            catch
+            else
             {
-                var submit = _page.Locator("input[type=\"submit\"], button[type=\"submit\"], input[name=\"wp-submit\"]").First;
-                try { await submit.ClickAsync(); } catch { }
+                _progress("Preenchendo credenciais...");
+                await _page.WaitForSelectorAsync(SsgSelectors.LoginUser, new() { State = WaitForSelectorState.Visible, Timeout = 30000 });
+                await _page.Locator(SsgSelectors.LoginUser).FillAsync(_config.Credentials.Username);
+                await _page.Locator(SsgSelectors.LoginPassword).FillAsync(_config.Credentials.Password);
+
+                try
+                {
+                    await _page.WaitForSelectorAsync(SsgSelectors.LoginTotp, new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
+                    var totpField = _page.Locator(SsgSelectors.LoginTotp);
+                    await totpField.FocusAsync();
+
+                    if (!string.IsNullOrWhiteSpace(_config.Credentials.TotpSecret))
+                    {
+                        var code = TotpGenerator.GenerateCode(_config.Credentials.TotpSecret);
+                        _progress("Preenchendo 2FA automaticamente...");
+                        await totpField.FillAsync(code);
+                        await _page.WaitForTimeoutAsync(500);
+                        await _page.Locator(SsgSelectors.LoginSubmit).First.ClickAsync();
+                    }
+                    else
+                    {
+                        _progress("Digite o código 2FA no navegador...");
+                    }
+                }
+                catch
+                {
+                    try { await _page.Locator(SsgSelectors.LoginSubmit).First.ClickAsync(); } catch { }
+                }
+
+                _progress("Aguardando finalização do login (até 5 min)...");
+                await _page.WaitForURLAsync(url => !url.Contains("wp-login") && !url.Contains("wp-admin"),
+                    new() { Timeout = 300000 });
             }
 
-            _progress("Aguardando finalização do login (até 5 min)...");
-            await _page.WaitForURLAsync(url =>
-                url == "https://portal.sysmap.com.br/" ||
-                (url.StartsWith("https://portal.sysmap.com.br") && !url.Contains("wp-login") && !url.Contains("wp-admin")),
-                new() { Timeout = 300000 });
-
-            _progress("Navegando para timesheet...");
-            await _page.GotoAsync(_config.Ssg.TimesheetUrl);
-            await _page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+            _progress("Abrindo Registros de Entrada/Saída...");
+            await _page.GotoAsync(_config.Ssg.AccessEntryUrl);
+            await _page.WaitForSelectorAsync(SsgSelectors.DateRangeComponent,
+                new() { State = WaitForSelectorState.Visible, Timeout = 60000 });
+            await DismissModalsAsync();
+            V($"LoginAsync: tela de registros carregada ({_page.Url})");
             return true;
         }
         catch (Exception ex)
@@ -280,28 +429,55 @@ public sealed class SsgAutomation : IAsyncDisposable
         }
     }
 
+    // ------------------------------------------------------------------
+    // Filtro de período
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Seleciona o período pelo preset do dropdown ("Mês Atual" / "Mês Anterior") e filtra.
+    /// Digitar as datas manualmente não funciona: os campos são mascarados e o Angular
+    /// rejeita o filtro com "O campo Período é de preenchimento obrigatório".
+    /// </summary>
     public async Task<bool> SelectMonthAndFilterAsync(string period)
     {
-        if (_page is null || !_config.Automation.SelectCurrentMonth) return true;
-        var label = period == "mes_passado" ? "mês passado" : "mês atual";
+        if (_page is null) return false;
+        var label = period == "mes_passado" ? "mês anterior" : "mês atual";
         V($"SelectMonthAndFilterAsync: period='{period}' (label={label})");
         try
         {
-            await _page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-            var dropdown = _page.Locator("xpath=/html/body/div[3]/div[2]/div[2]/div[3]/div/div/div/a[2]");
-            await dropdown.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
-            await dropdown.ClickAsync();
+            await DismissModalsAsync();
+            await _page.WaitForSelectorAsync(SsgSelectors.DateRangeToggle,
+                new() { State = WaitForSelectorState.Visible, Timeout = 30000 });
 
-            var idx = period == "mes_passado" ? 2 : 1;
-            var option = _page.Locator($"xpath=/html/body/div[3]/div[2]/div[2]/div[3]/div/div/div/ul/li[{idx}]/a");
-            await option.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
-            await option.ClickAsync();
+            await _page.Locator(SsgSelectors.DateRangeToggle).First.ClickAsync();
+            await _page.WaitForTimeoutAsync(400);
 
-            var search = _page.Locator("#ButtonSearch");
-            await search.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
-            await search.ClickAsync();
-            await _page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-            return true;
+            var presetSelector = period == "mes_passado"
+                ? SsgSelectors.DateRangePreviousMonth
+                : SsgSelectors.DateRangeCurrentMonth;
+            await _page.Locator(presetSelector).First.ClickAsync();
+            await _page.WaitForTimeoutAsync(600);
+
+            var start = (await _page.Locator(SsgSelectors.StartDate).First.InputValueAsync() ?? string.Empty).Trim();
+            var end = (await _page.Locator(SsgSelectors.EndDate).First.InputValueAsync() ?? string.Empty).Trim();
+            V($"   período selecionado: {start} até {end}");
+            if (string.IsNullOrWhiteSpace(start) || string.IsNullOrWhiteSpace(end))
+            {
+                _log($"⚠️  Preset '{label}' não preencheu as datas do filtro");
+                return false;
+            }
+
+            _progress($"Filtrando {label}...");
+            await _page.Locator(SsgSelectors.FilterButton).First.ClickAsync();
+
+            await _page.WaitForSelectorAsync(SsgSelectors.DayCard,
+                new() { State = WaitForSelectorState.Attached, Timeout = 90000 });
+            await _page.WaitForTimeoutAsync(1500);
+            await DismissModalsAsync();
+
+            var days = await _page.Locator(SsgSelectors.DayCard).CountAsync();
+            V($"   {days} card(s) de dia carregado(s)");
+            return days > 0;
         }
         catch (Exception ex)
         {
@@ -310,62 +486,70 @@ public sealed class SsgAutomation : IAsyncDisposable
         }
     }
 
+    // ------------------------------------------------------------------
+    // Leitura do que já está cadastrado
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Varre os cards de dia e coleta as datas que já possuem registros de E/S, os
+    /// horários já salvos (para as regras de duplicidade) e um OSI/Projeto/Atividade
+    /// conhecido (fallback do autocomplete).
+    /// </summary>
     public async Task<HashSet<string>> GetRegisteredDatesAsync()
     {
-        if (_page is null) return new();
-        V("GetRegisteredDatesAsync: lendo #TableTimesheet input.activity-timesheet[date] + horários por data");
+        if (_page is null) return RegisteredDates;
+        V("GetRegisteredDatesAsync: varrendo cards .access-entry-day");
         try
         {
-            await _page.WaitForSelectorAsync("#TableTimesheet", new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
-            var inputs = await _page.Locator("#TableTimesheet input.activity-timesheet[date]").AllAsync();
-            V($"   {inputs.Count} input(s) de data encontrados");
-            foreach (var inp in inputs)
-            {
-                var date = await inp.GetAttributeAsync("date");
-                if (!string.IsNullOrWhiteSpace(date) && date.Contains('/'))
-                    RegisteredDates.Add(date.Trim());
-            }
-            V($"   datas únicas registradas: {RegisteredDates.Count}");
+            var cards = await _page.Locator(SsgSelectors.DayCard).AllAsync();
+            V($"   {cards.Count} card(s) encontrados");
 
-            // Coleta também os horários (clock-in/out) já preenchidos de cada data.
-            // Isto é necessário para que BlockDuplicateTimes/BlockSameMinutes enxerguem
-            // horários cadastrados em execuções anteriores e não voltem a usá-los.
-            var rows = await _page.Locator("#TableTimesheet tbody tr").AllAsync();
-            foreach (var row in rows)
+            foreach (var card in cards)
             {
-                var dateField = row.Locator("input.activity-timesheet[date]").First;
-                if (await dateField.CountAsync() == 0) continue;
-                var date = await dateField.GetAttributeAsync("date");
+                var date = (await card.GetAttributeAsync(SsgSelectors.AttrDate) ?? string.Empty).Trim();
                 if (string.IsNullOrWhiteSpace(date)) continue;
-                date = date.Trim();
 
-                var clockRows = await row.Locator("table.table-clockInOut tbody tr.dynamicClockInOut").AllAsync();
-                if (clockRows.Count == 0) continue;
-                if (!RegisteredTimesByDate.TryGetValue(date, out var list))
+                var times = new List<string>();
+                var rows = await card.Locator(SsgSelectors.AccessRows).AllAsync();
+                foreach (var row in rows)
                 {
-                    list = new List<string>();
-                    RegisteredTimesByDate[date] = list;
-                }
-                foreach (var cr in clockRows)
-                {
-                    var inF = cr.Locator("input.textbox-clockin");
-                    var outF = cr.Locator("input.textbox-clockout");
-                    if (await inF.CountAsync() > 0)
+                    var inField = row.Locator(SsgSelectors.ClockIn);
+                    var outField = row.Locator(SsgSelectors.ClockOut);
+                    if (await inField.CountAsync() > 0)
                     {
-                        var v = (await inF.InputValueAsync() ?? string.Empty).Trim();
-                        if (!string.IsNullOrWhiteSpace(v)) list.Add(v);
+                        var v = (await inField.First.InputValueAsync() ?? string.Empty).Trim();
+                        if (IsTime(v)) times.Add(v);
                     }
-                    if (await outF.CountAsync() > 0)
+                    if (await outField.CountAsync() > 0)
                     {
-                        var v = (await outF.InputValueAsync() ?? string.Empty).Trim();
-                        if (!string.IsNullOrWhiteSpace(v)) list.Add(v);
+                        var v = (await outField.First.InputValueAsync() ?? string.Empty).Trim();
+                        if (IsTime(v)) times.Add(v);
+                    }
+                }
+
+                if (times.Count > 0)
+                {
+                    RegisteredDates.Add(date);
+                    RegisteredTimesByDate[date] = times;
+                }
+
+                if (_knownProjectText is null)
+                {
+                    var projects = await card.Locator(SsgSelectors.ProjectActivity).AllAsync();
+                    foreach (var p in projects)
+                    {
+                        var v = (await p.InputValueAsync() ?? string.Empty).Trim();
+                        if (!string.IsNullOrWhiteSpace(v) && v != "-")
+                        {
+                            _knownProjectText = v;
+                            V($"   OSI/Projeto conhecido capturado: '{v}'");
+                            break;
+                        }
                     }
                 }
             }
-            V($"   horários históricos coletados em {RegisteredTimesByDate.Count} data(s)");
 
-            // Alimenta o validador para que as regras de duplicidade considerem o
-            // que já está salvo no SSG (não apenas o que estamos inserindo agora).
+            V($"   datas com registro: {RegisteredDates.Count} | horários coletados em {RegisteredTimesByDate.Count} data(s)");
             _validator.LoadExistingTimes(RegisteredTimesByDate);
             return RegisteredDates;
         }
@@ -379,531 +563,29 @@ public sealed class SsgAutomation : IAsyncDisposable
     public bool IsDateRegistered(string date) => RegisteredDates.Contains(date);
 
     /// <summary>
-    /// Lista de datas (DD/MM/YYYY) que foram marcadas para exclusão por
-    /// <see cref="MarkPartialDateForDeletionAsync"/> e estão aguardando
-    /// <see cref="ExecutePendingDeletionsAsync"/> ser invocado em lote.
+    /// Datas presentes no arquivo que não têm card correspondente no período filtrado
+    /// (dia fora do período, bloqueado para lançamento ou data inválida).
     /// </summary>
-    public List<string> PendingDeletions { get; } = new();
-
-    /// <summary>
-    /// Para uma data já cadastrada no SSG, identifica se faltam pares Entrada-Saída
-    /// em relação ao arquivo de origem. Quando faltam, marca os checkboxes corretos
-    /// (clock-in/out esquerda + linha do projeto acima de Horas Apontadas) e adiciona
-    /// a data em <see cref="PendingDeletions"/>. NÃO clica o X nem confirma — isso
-    /// é feito uma única vez em lote por <see cref="ExecutePendingDeletionsAsync"/>.
-    /// Retorna true se a data foi marcada para exclusão.
-    /// </summary>
-    public async Task<bool> MarkPartialDateForDeletionAsync(PunchRecord record)
+    public async Task<List<string>> GetUnavailableDatesAsync(IEnumerable<string> dates)
     {
-        if (_page is null) return false;
-        if (!RegisteredDates.Contains(record.Date)) return false;
-
-        // Pares desejados a partir do arquivo de origem
-        var desired = new List<(string inV, string outV)>();
-        if (!string.IsNullOrWhiteSpace(record.Entry) && !string.IsNullOrWhiteSpace(record.LunchOut))
-            desired.Add((record.Entry, record.LunchOut));
-        if (!string.IsNullOrWhiteSpace(record.LunchReturn) && !string.IsNullOrWhiteSpace(record.Exit))
-            desired.Add((record.LunchReturn, record.Exit));
-        if (desired.Count == 0 && !string.IsNullOrWhiteSpace(record.Entry) && !string.IsNullOrWhiteSpace(record.Exit))
-            desired.Add((record.Entry, record.Exit));
-        if (desired.Count == 0) return false;
-
-        V($"CompletePartialDateAsync({record.Date}): pares desejados={desired.Count} → " +
-          string.Join(" | ", desired.Select(p => $"{p.inV}-{p.outV}")));
-
-        // Localiza a linha (row) cuja data bate
-        var candidateRows = await _page.Locator("#TableTimesheet > tbody > tr:has(input.activity-timesheet[date])").AllAsync();
-        if (candidateRows.Count == 0)
-            candidateRows = await _page.Locator("#TableTimesheet tbody tr").AllAsync();
-        ILocator? targetRow = null;
-        foreach (var row in candidateRows)
+        var missing = new List<string>();
+        if (_page is null) return missing;
+        foreach (var date in dates)
         {
-            var df = row.Locator("input.activity-timesheet[date]").First;
-            if (await df.CountAsync() == 0) continue;
-            string? d = null;
-            try { d = await df.GetAttributeAsync("date", new() { Timeout = 2000 }); }
-            catch { continue; }
-            if (!string.IsNullOrWhiteSpace(d) && d.Trim() == record.Date)
-            {
-                targetRow = row;
-                break;
-            }
+            var card = await FindDayCardAsync(date);
+            if (card is null) { missing.Add(date); continue; }
+            var allowed = (await card.GetAttributeAsync(SsgSelectors.AttrAccessAllowed) ?? "Y").Trim();
+            var valid = (await card.GetAttributeAsync(SsgSelectors.AttrValidDate) ?? "Y").Trim();
+            if (!allowed.Equals("Y", StringComparison.OrdinalIgnoreCase) ||
+                !valid.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                missing.Add(date);
         }
-        if (targetRow is null)
-        {
-            V($"   linha da data {record.Date} não encontrada — pulando");
-            return false;
-        }
-
-        // Conta pares já existentes (lê tanto inputs editáveis quanto células de texto)
-        var existingPairs = await ReadExistingPairsAsync(targetRow);
-        V($"   pares já no SSG={existingPairs.Count} | desejados={desired.Count}");
-
-        if (existingPairs.Count >= desired.Count)
-        {
-            V($"   SSG já tem {existingPairs.Count} ≥ {desired.Count} pares — nada a completar");
-            return false;
-        }
-
-        // 1) Marca SOMENTE o checkbox mais à esquerda de cada linha de clock-in/out
-        //    do dia (a coluna "select" da tabela table-clockInOut). NÃO devemos marcar
-        //    o checkbox de "Banco de Horas" (coluna à direita) nem checkboxes da
-        //    tabela de timesheetrecording — isso causaria exclusão indevida de outros
-        //    dias / efeitos colaterais (o que aconteceu nos dias 20 e 21).
-        V($"   ⚠️  {record.Date} está incompleto — excluindo todos os apontamentos para recadastrar");
-        var clockSelectCells = await targetRow
-            .Locator("table.table-clockInOut tbody tr.dynamicClockInOut > td:first-child input[type='checkbox']")
-            .AllAsync();
-        // Fallback caso a estrutura não tenha tr.dynamicClockInOut explícita
-        if (clockSelectCells.Count == 0)
-        {
-            clockSelectCells = await targetRow
-                .Locator("table.table-clockInOut tbody tr > td:first-child input[type='checkbox']")
-                .AllAsync();
-        }
-        V($"   checkboxes de seleção encontrados (col esquerda clockInOut)={clockSelectCells.Count}");
-        foreach (var cb in clockSelectCells)
-        {
-            try
-            {
-                if (!await cb.IsCheckedAsync()) await cb.CheckAsync(new() { Timeout = 2000 });
-            }
-            catch { /* invisíveis — ignora */ }
-        }
-
-        // 1b) Marca também o checkbox da linha do projeto (acima de "Horas Apontadas"),
-        //     que pertence à table-timesheetrecording. Sem ele a exclusão remove apenas
-        //     os clock-in/out mas mantém a linha do projeto/horas-apontadas órfã.
-        var projectSelectCells = await targetRow
-            .Locator("table.table-timesheetrecording tbody tr.dynamicTimesheetrecording > td:first-child input[type='checkbox']")
-            .AllAsync();
-        if (projectSelectCells.Count == 0)
-        {
-            projectSelectCells = await targetRow
-                .Locator("table.table-timesheetrecording tbody tr > td:first-child input[type='checkbox']")
-                .AllAsync();
-        }
-        V($"   checkboxes da linha do projeto (acima de Horas Apontadas)={projectSelectCells.Count}");
-        foreach (var cb in projectSelectCells)
-        {
-            try
-            {
-                if (!await cb.IsCheckedAsync()) await cb.CheckAsync(new() { Timeout = 2000 });
-            }
-            catch { /* invisíveis — ignora */ }
-        }
-
-        // Não clica o X aqui — a exclusão é executada em lote por
-        // ExecutePendingDeletionsAsync para minimizar a sobrecarga de
-        // modais de segurança/confirmação repetidos.
-        if (!PendingDeletions.Contains(record.Date))
-            PendingDeletions.Add(record.Date);
-        V($"   {record.Date} marcado para exclusão em lote (total pendente={PendingDeletions.Count})");
-        return true;
+        return missing;
     }
 
-    /// <summary>
-    /// Executa a exclusão em lote de todas as datas previamente marcadas por
-    /// <see cref="MarkPartialDateForDeletionAsync"/>. Estratégia:
-    /// 1) Clica UMA ÚNICA vez no botão "X" do header (que age sobre todos os
-    ///    checkboxes marcados, somando linhas de múltiplos dias).
-    /// 2) Confirma o primeiro modal (modal de segurança "Tem certeza?").
-    /// 3) Fecha os modais subsequentes "Perfeito! Registro excluído com sucesso"
-    ///    — um para cada data excluída.
-    /// 4) Limpa o cache de datas/horários para as datas excluídas e zera a lista
-    ///    de pendências.
-    /// </summary>
-    public async Task<bool> ExecutePendingDeletionsAsync()
-    {
-        if (_page is null) return false;
-        if (PendingDeletions.Count == 0) return true;
-
-        V($"ExecutePendingDeletionsAsync: {PendingDeletions.Count} data(s) pendente(s) → {string.Join(", ", PendingDeletions)}");
-        _progress($"Excluindo {PendingDeletions.Count} dia(s) em lote...");
-
-        // 1) Clica o X uma única vez
-        var deleted = await ClickHeaderDeleteAsync();
-        if (!deleted)
-        {
-            _log("⚠️  Não foi possível clicar no botão de exclusão (lote)");
-            return false;
-        }
-
-        // 2) Confirma o modal de segurança ("Tem certeza?")
-        await ConfirmDeleteModalAsync();
-        await _page.WaitForTimeoutAsync(500);
-
-        // 3) Fecha os modais "Perfeito! Registro excluído com sucesso" — um por data.
-        //    O SSG enfileira esses modais; cada OK fecha um e o próximo aparece.
-        for (var i = 0; i < PendingDeletions.Count; i++)
-        {
-            try
-            {
-                if (!await CloseSuccessModalAsync(timeoutMs: 15000))
-                {
-                    V($"   modal 'Perfeito!' [{i + 1}/{PendingDeletions.Count}] não detectado — encerrando loop de fechamento");
-                    break;
-                }
-                V($"   modal 'Perfeito!' [{i + 1}/{PendingDeletions.Count}] fechado");
-            }
-            catch (Exception ex)
-            {
-                V($"   exceção ao fechar modal 'Perfeito!' [{i + 1}]: {ex.Message}");
-                break;
-            }
-        }
-        await _page.WaitForTimeoutAsync(800);
-
-        // 4) Limpa cache para as datas removidas
-        foreach (var d in PendingDeletions)
-        {
-            RegisteredDates.Remove(d);
-            RegisteredTimesByDate.Remove(d);
-        }
-        _log($"🗑️  {PendingDeletions.Count} dia(s) excluído(s) em lote");
-        PendingDeletions.Clear();
-        return true;
-    }
-
-    /// <summary>
-    /// Fecha o modal de sucesso "Perfeito! Registro excluído com sucesso" (botão OK).
-    /// Tenta vários seletores e aguarda o modal sumir de fato.
-    /// </summary>
-    private async Task<bool> CloseSuccessModalAsync(int timeoutMs)
-    {
-        if (_page is null) return false;
-        var candidates = new[]
-        {
-            "div.modal.in .modal-footer button.btn-primary",
-            "div.modal.in .modal-footer button",
-            "div.modal:visible .modal-footer button.btn-primary",
-            ".bootbox.modal.in button.btn-primary",
-            "xpath=/html/body/div[9]/div/div/div[2]/button",
-            "xpath=//div[contains(@class,'modal') and contains(@class,'in')]//div[contains(@class,'modal-footer')]//button[contains(.,'OK')]"
-        };
-        foreach (var sel in candidates)
-        {
-            var loc = _page.Locator(sel).First;
-            try
-            {
-                await loc.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
-                await loc.ClickAsync(new() { Timeout = 2000 });
-                // Aguarda o modal sumir antes de processar o próximo
-                try { await loc.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 5000 }); } catch { }
-                return true;
-            }
-            catch { /* tenta próximo */ }
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Wrapper de compatibilidade: marca a data para exclusão e re-cadastra
-    /// imediatamente. Mantido para chamadas legadas; o fluxo preferido é
-    /// <see cref="MarkPartialDateForDeletionAsync"/> + <see cref="ExecutePendingDeletionsAsync"/>
-    /// + <see cref="RegisterPunchAsync"/> chamados em lote pelo orquestrador.
-    /// </summary>
-    public async Task<bool> CompletePartialDateAsync(PunchRecord record)
-    {
-        var marked = await MarkPartialDateForDeletionAsync(record);
-        if (!marked) return false;
-        var ok = await ExecutePendingDeletionsAsync();
-        if (!ok) return false;
-        V($"   re-cadastrando {record.Date} via RegisterPunchAsync");
-        var (success, _) = await RegisterPunchAsync(record);
-        if (success)
-            _log($"♻️  {record.Date}: excluído e re-cadastrado");
-        return success;
-    }
-
-    /// <summary>
-    /// Lê os pares Entrada/Saída de uma linha do timesheet, suportando tanto
-    /// linhas editáveis (input.textbox-clockin/out) quanto linhas já salvas
-    /// renderizadas como texto.
-    /// </summary>
-    private async Task<List<(string inV, string outV)>> ReadExistingPairsAsync(ILocator targetRow)
-    {
-        var result = new List<(string inV, string outV)>();
-        var allClockRows = await targetRow.Locator("table.table-clockInOut tbody tr").AllAsync();
-        foreach (var cr in allClockRows)
-        {
-            string inV = string.Empty, outV = string.Empty;
-            var inLoc = cr.Locator("input.textbox-clockin");
-            var outLoc = cr.Locator("input.textbox-clockout");
-            if (await inLoc.CountAsync() > 0)
-            {
-                try { inV = (await inLoc.First.InputValueAsync(new() { Timeout = 1500 }) ?? string.Empty).Trim(); }
-                catch { }
-            }
-            if (await outLoc.CountAsync() > 0)
-            {
-                try { outV = (await outLoc.First.InputValueAsync(new() { Timeout = 1500 }) ?? string.Empty).Trim(); }
-                catch { }
-            }
-            if (string.IsNullOrWhiteSpace(inV) && string.IsNullOrWhiteSpace(outV))
-            {
-                try
-                {
-                    var rowText = (await cr.InnerTextAsync(new() { Timeout = 1500 }) ?? string.Empty);
-                    var matches = System.Text.RegularExpressions.Regex.Matches(rowText, @"\b([01]?\d|2[0-3]):[0-5]\d\b");
-                    if (matches.Count >= 2)
-                    {
-                        inV = matches[0].Value.PadLeft(5, '0');
-                        outV = matches[1].Value.PadLeft(5, '0');
-                    }
-                }
-                catch { }
-            }
-            if (!string.IsNullOrWhiteSpace(inV) || !string.IsNullOrWhiteSpace(outV))
-                result.Add((inV, outV));
-        }
-        return result;
-    }
-
-    /// <summary>
-    /// Clica no botão "X" de exclusão do header do grid (topo direito, ao lado dos
-    /// botões "+" e "salvar"). Tenta vários seletores para tolerar variações de DOM.
-    /// </summary>
-    private async Task<bool> ClickHeaderDeleteAsync()
-    {
-        if (_page is null) return false;
-        // Ordem dos ícones no header do grid (h3 > span > i):
-        //   i[1] = recarregar/reload (⊙)  ← NUNCA clicar: causa reset/efeitos colaterais
-        //   i[2] = adicionar (+)         (usado em RegisterPunchAsync.addBtn)
-        //   i[3] = salvar/confirmar (✓)  (usado em ConfirmEntriesAsync.saveBtn)
-        //   i[4] = excluir (X)           ← este é o correto para exclusão
-        //   i[5] = dropdown (▲)
-        var candidates = new[]
-        {
-            "xpath=/html/body/div[3]/div[3]/div[1]/h3/span/i[4]",
-            "h3 span i.fa-trash",
-            "h3 span i.fa-times",
-            "h3 span i.fa-remove",
-            "h3 span i[title*='Excluir' i]",
-            "h3 span i[title*='Remover' i]"
-        };
-        foreach (var sel in candidates)
-        {
-            var loc = _page.Locator(sel).First;
-            try
-            {
-                if (await loc.CountAsync() == 0) continue;
-                await loc.ClickAsync(new() { Timeout = 2000 });
-                V($"   X de exclusão clicado via '{sel}'");
-                return true;
-            }
-            catch { /* tenta próximo */ }
-        }
-        V("   ⚠️ nenhum seletor do X de exclusão funcionou");
-        return false;
-    }
-
-    /// <summary>
-    /// Aguarda e confirma o modal de exclusão (bootbox/bootstrap padrão do SSG).
-    /// </summary>
-    private async Task ConfirmDeleteModalAsync()
-    {
-        if (_page is null) return;
-        var candidates = new[]
-        {
-            ".bootbox button.btn-primary",
-            ".bootbox button.btn-danger",
-            "div.modal.in button.btn-primary",
-            "div.modal.in button.btn-danger",
-            "div.modal button.confirm",
-            "div.modal button[data-bb-handler='confirm']"
-        };
-        foreach (var sel in candidates)
-        {
-            var loc = _page.Locator(sel).First;
-            try
-            {
-                if (await loc.CountAsync() == 0) continue;
-                await loc.WaitForAsync(new() { Timeout = 3000, State = WaitForSelectorState.Visible });
-                await loc.ClickAsync();
-                V($"   modal de confirmação confirmado via '{sel}'");
-                return;
-            }
-            catch { }
-        }
-        // Fallback: pressiona Enter
-        try { await _page.Keyboard.PressAsync("Enter"); V("   modal confirmado via Enter"); } catch { }
-    }
-
-    /// <summary>
-    /// Lê o valor "Horas Registro" calculado e exibido pelo próprio SSG dentro da
-    /// linha (geralmente abaixo dos horários Entrada-Saída). É esse valor que deve
-    /// ser inserido em "Horas Apontadas" para evitar divergência.
-    /// </summary>
-    private async Task<string?> ReadHorasRegistroAsync(ILocator row)
-    {
-        var selectors = new[]
-        {
-            "table.table-clockInOut tfoot td",
-            "table.table-clockInOut tr.totalClockInOut td",
-            "table.table-clockInOut tr.total td",
-            "table.table-clockInOut .total-hours",
-            "table.table-clockInOut .clockInOut-totals",
-            "td.total-clockInOut",
-            "[class*='totalClockInOut']"
-        };
-        foreach (var sel in selectors)
-        {
-            var loc = row.Locator(sel);
-            int n;
-            try { n = await loc.CountAsync(); } catch { continue; }
-            if (n == 0) continue;
-            try
-            {
-                var txt = await loc.First.InnerTextAsync(new() { Timeout = 1500 });
-                var m = System.Text.RegularExpressions.Regex.Match(txt ?? string.Empty, @"\b([01]?\d|2[0-3]):[0-5]\d\b");
-                if (m.Success)
-                {
-                    V($"   Horas Registro lida via '{sel}' = '{m.Value}'");
-                    return m.Value.PadLeft(5, '0');
-                }
-            }
-            catch { }
-        }
-        // Fallback: pega o último HH:mm visível na tabela de clock (que é o total).
-        try
-        {
-            var fullText = await row.Locator("table.table-clockInOut").First.InnerTextAsync(new() { Timeout = 1500 });
-            var matches = System.Text.RegularExpressions.Regex.Matches(fullText ?? string.Empty, @"\b([01]?\d|2[0-3]):[0-5]\d\b");
-            if (matches.Count > 0)
-            {
-                var v = matches[^1].Value.PadLeft(5, '0');
-                V($"   Horas Registro (fallback último HH:mm) = '{v}'");
-                return v;
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    /// <summary>
-    /// Varre os registros já cadastrados procurando por linhas com indicador de erro
-    /// (thumbs-down vermelho — geralmente representado por &lt;i class="fa-thumbs-down"&gt;
-    /// ou &lt;span class="...invalid..."&gt;). Para cada uma identificada:
-    /// 1) Lê os horários atuais (entrada/saída).
-    /// 2) Re-aplica todas as regras de validação (redondo, duplicado, minutos iguais, almoço 1h).
-    /// 3) Reescreve os campos com os valores corrigidos.
-    /// Os campos do timesheet são editáveis enquanto não confirmados.
-    /// </summary>
-    public async Task<int> FixFlaggedExistingRecordsAsync()
-    {
-        if (_page is null) return 0;
-        V("FixFlaggedExistingRecordsAsync: procurando registros com indicador de erro");
-        var fixedCount = 0;
-        try
-        {
-            await _page.WaitForSelectorAsync("#TableTimesheet", new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
-            // Linhas existentes (não as recém-adicionadas .dynamic)
-            var rows = await _page.Locator("#TableTimesheet tbody tr").AllAsync();
-            V($"   total de linhas no timesheet={rows.Count}");
-
-            foreach (var row in rows)
-            {
-                // Detecta indicador de erro: thumbs-down, ícone vermelho, classe contendo 'invalid' ou 'error'
-                var flagSelectors = new[]
-                {
-                    "i.fa-thumbs-down",
-                    "i.fa-thumbs-o-down",
-                    "[class*='thumbs-down']",
-                    "[class*='invalid']",
-                    "[class*='error']",
-                    "i[style*='color: red']",
-                    "i[style*='color:#']" // qualquer ícone colorido
-                };
-                bool flagged = false;
-                foreach (var sel in flagSelectors)
-                {
-                    if (await row.Locator(sel).CountAsync() > 0) { flagged = true; break; }
-                }
-                if (!flagged) continue;
-
-                // Extrai data da linha
-                var dateField = row.Locator("input.activity-timesheet[date], td input[type='text']").First;
-                if (await dateField.CountAsync() == 0) continue;
-                var dateAttr = await dateField.GetAttributeAsync("date") ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(dateAttr))
-                    dateAttr = (await dateField.InputValueAsync() ?? string.Empty).Trim();
-                if (string.IsNullOrWhiteSpace(dateAttr)) continue;
-
-                V($"   ⚠️  linha com flag detectada para data='{dateAttr}'");
-
-                // Coleta horários atuais (entrada/saída) das clockInOut rows desta data
-                var clockRows = await row.Locator("table.table-clockInOut tbody tr.dynamicClockInOut").AllAsync();
-                if (clockRows.Count == 0)
-                {
-                    V("      sem clockRows — pulando");
-                    continue;
-                }
-
-                var times = new List<(ILocator inField, ILocator outField, string inVal, string outVal)>();
-                foreach (var cr in clockRows)
-                {
-                    var inF = cr.Locator("input.textbox-clockin");
-                    var outF = cr.Locator("input.textbox-clockout");
-                    if (await inF.CountAsync() == 0 || await outF.CountAsync() == 0) continue;
-                    var inV = (await inF.InputValueAsync() ?? string.Empty).Trim();
-                    var outV = (await outF.InputValueAsync() ?? string.Empty).Trim();
-                    times.Add((inF, outF, inV, outV));
-                }
-                if (times.Count == 0) continue;
-
-                // Reconstrói entrada/saidaAlmoço/retorno/saída a partir dos pares
-                string entry, lunchOut = string.Empty, lunchReturn = string.Empty, exit;
-                if (times.Count >= 2)
-                {
-                    entry = times[0].inVal;
-                    lunchOut = times[0].outVal;
-                    lunchReturn = times[1].inVal;
-                    exit = times[1].outVal;
-                }
-                else
-                {
-                    entry = times[0].inVal;
-                    exit = times[0].outVal;
-                }
-
-                V($"      horários atuais: entry={entry} lo={lunchOut} lr={lunchReturn} exit={exit}");
-                var adjusted = _validator.Adjust(dateAttr, entry, lunchOut, lunchReturn, exit);
-                V($"      ajustado:        entry={adjusted.Entry} lo={adjusted.LunchOut} lr={adjusted.LunchReturn} exit={adjusted.Exit}");
-                if (adjusted.Adjustments.Count == 0)
-                {
-                    V("      nenhum ajuste aplicável — pulando");
-                    continue;
-                }
-
-                // Reescreve os campos
-                if (times.Count >= 2)
-                {
-                    await FillTimeFieldAsync(times[0].inField, adjusted.Entry, $"FIX[{dateAttr}].ENTRADA");
-                    await FillTimeFieldAsync(times[0].outField, adjusted.LunchOut, $"FIX[{dateAttr}].SAÍDA-ALMOÇO");
-                    await FillTimeFieldAsync(times[1].inField, adjusted.LunchReturn, $"FIX[{dateAttr}].RETORNO");
-                    await FillTimeFieldAsync(times[1].outField, adjusted.Exit, $"FIX[{dateAttr}].SAÍDA");
-                }
-                else
-                {
-                    await FillTimeFieldAsync(times[0].inField, adjusted.Entry, $"FIX[{dateAttr}].ENTRADA");
-                    await FillTimeFieldAsync(times[0].outField, adjusted.Exit, $"FIX[{dateAttr}].SAÍDA");
-                }
-
-                _log($"🔧 {dateAttr}: corrigido — {string.Join(" ; ", adjusted.Adjustments)}");
-                fixedCount++;
-            }
-
-            V($"FixFlaggedExistingRecordsAsync: {fixedCount} registro(s) corrigido(s)");
-            return fixedCount;
-        }
-        catch (Exception ex)
-        {
-            V($"FixFlaggedExistingRecordsAsync EXCEPTION: {ex.Message}");
-            _log($"Erro ao corrigir registros existentes: {ex.Message}");
-            return fixedCount;
-        }
-    }
+    // ------------------------------------------------------------------
+    // Registro do ponto
+    // ------------------------------------------------------------------
 
     public async Task<(bool success, List<string> adjustments)> RegisterPunchAsync(PunchRecord record)
     {
@@ -922,182 +604,68 @@ public sealed class SsgAutomation : IAsyncDisposable
 
         try
         {
-            // 1. Adicionar nova linha
-            V("🔸 Etapa 1/6: clicando no botão '+' (nova linha)");
-            var addBtn = _page.Locator("xpath=/html/body/div[3]/div[3]/div[1]/h3/span/i[2]");
-            await addBtn.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
-            await addBtn.ClickAsync();
-            await _page.WaitForTimeoutAsync(800);
-
-            // 2. Índice da nova linha
-            var dynRows = await _page.Locator("#TableTimesheet tbody tr.dynamic[style*=\"display: table-row\"]").CountAsync();
-            var rowIdx = dynRows + 1;
-            V($"🔸 Etapa 2/6: dynRows visiveis={dynRows} → rowIdx={rowIdx}");
-
-            // 3. Preenche data
-            var expectedDate = FormatDate(adjusted.Date);
-            V($"🔸 Etapa 3/6: preenchendo DATA campo[row={rowIdx},col=1] valor='{adjusted.Date}' (normalizado='{expectedDate}')");
-            var dateInput = _page.Locator($"xpath=//*[@id=\"TableTimesheet\"]/tbody/tr[{rowIdx}]/td[1]/div/input");
-            await dateInput.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
-            var dateOk = await FillDateFieldAsync(dateInput, adjusted.Date, $"DATA(row={rowIdx})");
-            await dateInput.PressAsync("Tab");
-            await _page.WaitForTimeoutAsync(500);
-            var dateValue = (await dateInput.InputValueAsync() ?? string.Empty).Trim();
-            V($"   data final no campo: '{dateValue}'");
-            if (!dateOk || dateValue != expectedDate)
+            // 1. Localiza o card do dia (já renderizado pelo filtro — não se cria linha nem se digita data)
+            var card = await FindDayCardAsync(adjusted.Date);
+            if (card is null)
             {
-                _log($"❌ Falha ao preencher data {adjusted.Date} (campo ficou '{dateValue}'). Abortando registro.");
-                V($"   ❌ data não aceita pelo site — abortando registro para evitar inserir lixo.");
+                _log($"❌ {adjusted.Date}: card do dia não encontrado no período filtrado");
                 return (false, adjusted.Adjustments);
             }
 
-            // 4. Monta pares de horários (E-S)
+            var allowed = (await card.GetAttributeAsync(SsgSelectors.AttrAccessAllowed) ?? "Y").Trim();
+            var validDate = (await card.GetAttributeAsync(SsgSelectors.AttrValidDate) ?? "Y").Trim();
+            V($"🔸 Etapa 1/5: card localizado (access-allowed={allowed}, valid-date={validDate})");
+            if (!allowed.Equals("Y", StringComparison.OrdinalIgnoreCase) ||
+                !validDate.Equals("Y", StringComparison.OrdinalIgnoreCase))
+            {
+                _log($"⛔ {adjusted.Date}: dia não permite lançamento (allowed={allowed}, valid={validDate})");
+                return (false, adjusted.Adjustments);
+            }
+
+            // 2. Expande o card
+            V("🔸 Etapa 2/5: expandindo o card do dia");
+            await EnsureDayExpandedAsync(card);
+
+            // 3. Pares Entrada/Saída
             var pairs = !string.IsNullOrWhiteSpace(adjusted.LunchOut) && !string.IsNullOrWhiteSpace(adjusted.LunchReturn)
                 ? new[] { (adjusted.Entry, adjusted.LunchOut), (adjusted.LunchReturn, adjusted.Exit) }
                 : new[] { (adjusted.Entry, adjusted.Exit) };
-            V($"🔸 Etapa 4/6: {pairs.Length} par(es) de horário para inserir: " +
+            V($"🔸 Etapa 3/5: inserindo {pairs.Length} par(es): " +
               string.Join(" | ", pairs.Select(p => $"{p.Item1}→{p.Item2}")));
 
-            var dropdown = _page.Locator($"xpath=//*[@id=\"TableTimesheet\"]/tbody/tr[{rowIdx}]/td[1]/div/div/button");
-            var optionEs = _page.Locator($"xpath=//*[@id=\"TableTimesheet\"]/tbody/tr[{rowIdx}]/td[1]/div/div/ul/li[1]/a");
-
-            for (var i = 0; i < pairs.Length; i++)
+            foreach (var (entryTime, exitTime) in pairs)
             {
-                var (entryTime, exitTime) = pairs[i];
-                if (i > 0)
-                {
-                    V($"   par[{i}]: clicando no dropdown 'E-S' para adicionar nova linha de clock");
-                    await dropdown.ClickAsync();
-                    await _page.WaitForTimeoutAsync(200);
-                    await optionEs.ClickAsync();
-                    await _page.WaitForTimeoutAsync(500);
-                }
+                var before = await card.Locator(SsgSelectors.AccessRows).CountAsync();
+                await card.Locator(SsgSelectors.AddAccessRow).First.ClickAsync();
+                await WaitForRowCountAsync(card, SsgSelectors.AccessRows, before + 1);
 
-                var clockRows = await _page.Locator($"#TableTimesheet tbody tr.dynamic:nth-child({rowIdx}) table.table-clockInOut tbody tr.dynamicClockInOut").AllAsync();
-                V($"   par[{i}]: clockRows encontradas={clockRows.Count}, usando índice {i}");
-                if (clockRows.Count > i)
+                var row = card.Locator(SsgSelectors.AccessRows).Last;
+                var okIn = await FillTimeFieldAsync(row.Locator(SsgSelectors.ClockIn).First, entryTime, $"E/S[{entryTime}].ENTRADA");
+                var okOut = await FillTimeFieldAsync(row.Locator(SsgSelectors.ClockOut).First, exitTime, $"E/S[{exitTime}].SAÍDA");
+                if (!okIn || !okOut)
                 {
-                    var clockRow = clockRows[i];
-                    var typeSelect = clockRow.Locator("select.ddl-access-type");
-                    var typeCount = await typeSelect.CountAsync();
-                    V($"   par[{i}]: ddl-access-type encontrado={typeCount}");
-                    if (typeCount > 0)
-                    {
-                        await typeSelect.SelectOptionAsync(new[] { "ATIVIDADE EXTERNA" });
-                        await _page.WaitForTimeoutAsync(200);
-                        V($"   par[{i}]: selecionado 'ATIVIDADE EXTERNA'");
-                    }
-
-                    var inField = clockRow.Locator("input.textbox-clockin");
-                    if (await inField.CountAsync() > 0)
-                    {
-                        await FillTimeFieldAsync(inField, entryTime, $"par[{i}].ENTRADA");
-                    }
-                    else
-                    {
-                        V($"   par[{i}]: ⚠️  campo input.textbox-clockin NÃO encontrado");
-                    }
-
-                    var outField = clockRow.Locator("input.textbox-clockout");
-                    if (await outField.CountAsync() > 0)
-                    {
-                        await FillTimeFieldAsync(outField, exitTime, $"par[{i}].SAÍDA");
-                    }
-                    else
-                    {
-                        V($"   par[{i}]: ⚠️  campo input.textbox-clockout NÃO encontrado");
-                    }
-                }
-                else
-                {
-                    V($"   par[{i}]: ⚠️  clockRow {i} indisponível (count={clockRows.Count})");
+                    _log($"❌ {adjusted.Date}: falha ao preencher {entryTime}-{exitTime}");
+                    return (false, adjusted.Adjustments);
                 }
             }
 
-            // 5. Selecionar OSI/Projeto (antes das horas, pois o campo de horas pertence à linha do projeto)
-            V("🔸 Etapa 5/6: selecionando OSI/Projeto");
-            var tsRows = await _page.Locator($"#TableTimesheet tbody tr.dynamic:nth-child({rowIdx}) table.table-timesheetrecording tbody tr.dynamicTimesheetrecording").AllAsync();
-            V($"   timesheetrecording rows encontradas={tsRows.Count}");
-            ILocator? projectRow = null;
-            if (tsRows.Count > 0)
-            {
-                projectRow = tsRows[^1];
-                var osiBtn = projectRow.Locator("span.input-group-btn button.button-show-items");
-                if (await osiBtn.CountAsync() > 0)
-                {
-                    V("   clicando botão 'show-items' do OSI");
-                    await osiBtn.ClickAsync();
-                    await _page.WaitForTimeoutAsync(500);
-                    var projectBtn = _page.Locator("xpath=/html/body/div[7]/div/div/div[2]/table/tbody/tr[2]/td[1]/button/i");
-                    await projectBtn.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
-                    V("   clicando botão do projeto (1ª linha do modal OSI)");
-                    await projectBtn.ClickAsync();
-                    await _page.WaitForTimeoutAsync(800);
-                }
-                else
-                {
-                    V("   ⚠️  botão show-items do OSI não encontrado");
-                }
-            }
+            // 4. Apontamento: horas + OSI/Projeto/Atividade
+            V("🔸 Etapa 4/5: adicionando linha de apontamento");
+            var apBefore = await card.Locator(SsgSelectors.AppointmentRows).CountAsync();
+            await card.Locator(SsgSelectors.AddAppointmentRow).First.ClickAsync();
+            await WaitForRowCountAsync(card, SsgSelectors.AppointmentRows, apBefore + 1);
+            var appointmentRow = card.Locator(SsgSelectors.AppointmentRows).Last;
 
-            // 6. Horas apontadas — deve ser EXATAMENTE o valor que o SSG calcula
-            //    abaixo dos horários (campo "Horas Registro"). Tentamos lê-lo da
-            //    linha recém-criada; se não conseguir, caímos no cálculo local.
-            string workedHours;
-            var newRowLoc = _page.Locator($"#TableTimesheet tbody tr.dynamic:nth-child({rowIdx})").First;
-            var read = await ReadHorasRegistroAsync(newRowLoc);
-            if (!string.IsNullOrWhiteSpace(read))
-            {
-                workedHours = read!;
-                V($"🔸 Etapa 6/6: horas apontadas (lidas do SSG)='{workedHours}'");
-            }
-            else
-            {
-                workedHours = CalcWorkedHours(adjusted.Entry, adjusted.LunchOut, adjusted.LunchReturn, adjusted.Exit);
-                V($"🔸 Etapa 6/6: horas apontadas (calculadas localmente)='{workedHours}'");
-            }
-            if (projectRow is not null)
-            {
-                // Tenta vários seletores em ordem para encontrar o input de horas dentro da linha do projeto
-                var hoursCandidates = new[]
-                {
-                    "input.textbox-hours",
-                    "input[placeholder='Horas']",
-                    "input.hours",
-                    "td input[type='text']:not([placeholder='Observação']):not([placeholder*='OSI'])"
-                };
-                ILocator? hoursField = null;
-                foreach (var sel in hoursCandidates)
-                {
-                    var loc = projectRow.Locator(sel).First;
-                    if (await loc.CountAsync() > 0)
-                    {
-                        hoursField = loc;
-                        V($"   campo de horas localizado via '{sel}'");
-                        break;
-                    }
-                }
+            // Prefere o total que o próprio SSG calculou para o dia (evita divergência
+            // entre "Horas Totais" e "Horas Apontadas").
+            var hours = await ReadDayTotalHoursAsync(card)
+                        ?? CalcWorkedHours(adjusted.Entry, adjusted.LunchOut, adjusted.LunchReturn, adjusted.Exit);
+            V($"   horas apontadas='{hours}'");
+            await FillTimeFieldAsync(appointmentRow.Locator(SsgSelectors.AppointedHours).First, hours, "HORAS APONTADAS");
 
-                // Fallback: pega o primeiro <input type=text> da linha do projeto (placeholder "Horas")
-                if (hoursField is null)
-                {
-                    var inputs = projectRow.Locator("input[type='text']");
-                    var n = await inputs.CountAsync();
-                    V($"   fallback: inputs[text] na linha do projeto={n}");
-                    if (n > 0) hoursField = inputs.First;
-                }
-
-                if (hoursField is not null)
-                {
-                    await FillTimeFieldAsync(hoursField, workedHours, "HORAS APONTADAS");
-                    await _page.WaitForTimeoutAsync(200);
-                }
-                else
-                {
-                    V("   ⚠️  campo de horas apontadas NÃO encontrado na linha do projeto");
-                    _log($"⚠️  Não foi possível preencher 'Horas Apontadas' para {record.Date}");
-                }
-            }
+            V("🔸 Etapa 5/5: selecionando OSI/Projeto/Atividade");
+            if (!await SelectProjectAsync(appointmentRow))
+                _log($"⚠️  {adjusted.Date}: OSI/Projeto/Atividade não selecionado — confira no navegador antes de salvar");
 
             _validator.RegisterUsedTimes(adjusted.Date, new[]
             {
@@ -1116,44 +684,262 @@ public sealed class SsgAutomation : IAsyncDisposable
         }
     }
 
+    private async Task<ILocator?> FindDayCardAsync(string date)
+    {
+        if (_page is null) return null;
+        var formatted = FormatDate(date);
+        var card = _page.Locator($"{SsgSelectors.DayCard}[{SsgSelectors.AttrDate}=\"{formatted}\"]").First;
+        return await card.CountAsync() > 0 ? card : null;
+    }
+
+    private async Task EnsureDayExpandedAsync(ILocator card)
+    {
+        await card.ScrollIntoViewIfNeededAsync();
+        var body = card.Locator(SsgSelectors.DayBody).First;
+        if (await body.CountAsync() == 0) return;
+        if (await body.IsVisibleAsync()) return;
+
+        await card.Locator(SsgSelectors.DayToggle).First.ClickAsync();
+        try
+        {
+            await body.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 10000 });
+        }
+        catch
+        {
+            V("   ⚠️ card não expandiu no tempo esperado");
+        }
+        await _page!.WaitForTimeoutAsync(300);
+    }
+
+    private async Task WaitForRowCountAsync(ILocator card, string rowsSelector, int expected)
+    {
+        var rows = card.Locator(rowsSelector);
+        for (var i = 0; i < 40; i++)
+        {
+            if (await rows.CountAsync() >= expected) return;
+            await _page!.WaitForTimeoutAsync(100);
+        }
+        V($"   ⚠️ esperado {expected} linha(s) em '{rowsSelector}', encontrado {await rows.CountAsync()}");
+    }
+
+    /// <summary>Lê "Horas Totais" calculado pelo SSG no card do dia.</summary>
+    private async Task<string?> ReadDayTotalHoursAsync(ILocator card)
+    {
+        try
+        {
+            var span = card.Locator(SsgSelectors.AccessTotalHours).First;
+            if (await span.CountAsync() == 0) return null;
+            var text = (await span.InnerTextAsync() ?? string.Empty).Trim();
+            var match = Regex.Match(text, @"\b([01]?\d|2[0-3]):[0-5]\d\b");
+            if (!match.Success) return null;
+            var value = match.Value.PadLeft(5, '0');
+            if (value == "00:00") return null;
+            V($"   Horas Totais lidas do SSG='{value}'");
+            return value;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Seleciona o OSI/Projeto/Atividade da linha de apontamento. Caminho principal:
+    /// botão "?" (<c>.button-show-items</c>) que abre a "Listagem de Itens" e escolhe o
+    /// item via <c>.button-select</c>. Fallback: autocomplete, digitando o início de um
+    /// projeto já usado pelo profissional em outro dia.
+    /// </summary>
+    private async Task<bool> SelectProjectAsync(ILocator appointmentRow)
+    {
+        if (_page is null) return false;
+        var field = appointmentRow.Locator(SsgSelectors.ProjectActivity).First;
+
+        // Caminho 1: modal "Listagem de Itens"
+        try
+        {
+            var showItems = appointmentRow.Locator(SsgSelectors.ShowItemsButton).First;
+            if (await showItems.CountAsync() > 0)
+            {
+                await showItems.ClickAsync();
+                var modal = _page.Locator(SsgSelectors.ItemsModal).First;
+                await modal.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 15000 });
+
+                var rows = await _page.Locator(SsgSelectors.ItemsModalRows).AllAsync();
+                V($"   modal de itens: {rows.Count} linha(s)");
+                foreach (var row in rows)
+                {
+                    var text = (await row.InnerTextAsync() ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(text) || text == "-") continue;
+
+                    var select = row.Locator(SsgSelectors.ItemsModalSelect).First;
+                    if (await select.CountAsync() == 0) continue;
+
+                    await select.ClickAsync();
+                    try { await modal.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 10000 }); } catch { }
+                    await _page.WaitForTimeoutAsync(400);
+
+                    var value = (await field.InputValueAsync() ?? string.Empty).Trim();
+                    V($"   item selecionado no modal → campo='{value}'");
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        _knownProjectText ??= value;
+                        return true;
+                    }
+                    break;
+                }
+
+                // Fecha o modal se ainda estiver aberto
+                try
+                {
+                    if (await modal.IsVisibleAsync())
+                    {
+                        await _page.Locator(SsgSelectors.ItemsModalClose).First.ClickAsync();
+                        await _page.WaitForTimeoutAsync(300);
+                    }
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            V($"   modal de itens falhou: {ex.Message}");
+        }
+
+        // Caminho 2: autocomplete com um projeto já conhecido
+        if (string.IsNullOrWhiteSpace(_knownProjectText))
+        {
+            V("   ⚠️ sem projeto conhecido para o autocomplete");
+            return false;
+        }
+
+        try
+        {
+            var term = _knownProjectText!.Length > 12 ? _knownProjectText[..12] : _knownProjectText;
+            await field.ClickAsync();
+            await field.PressAsync("Control+A");
+            await field.PressAsync("Delete");
+            await field.PressSequentiallyAsync(term, new() { Delay = 120 });
+
+            var suggestion = _page.Locator(SsgSelectors.TypeaheadItems).First;
+            await suggestion.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 15000 });
+            await suggestion.ClickAsync();
+            await _page.WaitForTimeoutAsync(400);
+
+            var value = (await field.InputValueAsync() ?? string.Empty).Trim();
+            V($"   autocomplete (term='{term}') → campo='{value}'");
+            return !string.IsNullOrWhiteSpace(value);
+        }
+        catch (Exception ex)
+        {
+            V($"   autocomplete falhou: {ex.Message}");
+            return false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Salvar
+    // ------------------------------------------------------------------
+
+    /// <summary>Clica em "Salvar dias alterados" e confirma o diálogo, se houver.</summary>
     public async Task<bool> ConfirmEntriesAsync()
     {
         if (_page is null) return false;
-        V("ConfirmEntriesAsync: clicando botão salvar");
+        V("ConfirmEntriesAsync: clicando 'Salvar dias alterados'");
         try
         {
-            var saveBtn = _page.Locator("xpath=/html/body/div[3]/div[3]/div[1]/h3/span/i[3]");
-            await saveBtn.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5000 });
-            await saveBtn.ClickAsync();
-            await _page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-            await _page.WaitForTimeoutAsync(1000);
+            var save = _page.Locator(SsgSelectors.SaveButton).First;
+            await save.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 15000 });
+            await save.ScrollIntoViewIfNeededAsync();
+            await save.ClickAsync();
+            await _page.WaitForTimeoutAsync(1500);
+
+            // Diálogo de confirmação ("Confirma o salvamento?"), quando exibido
+            var confirm = _page.Locator(SsgSelectors.BootboxPrimary).First;
+            if (await confirm.CountAsync() > 0 && await confirm.IsVisibleAsync())
+            {
+                V("   confirmando diálogo de salvamento");
+                await confirm.ClickAsync();
+                await _page.WaitForTimeoutAsync(1500);
+            }
+
             V("ConfirmEntriesAsync: OK");
             return true;
         }
         catch (Exception ex)
         {
-            _log($"Erro ao confirmar: {ex.Message}");
+            _log($"Erro ao salvar: {ex.Message}");
             return false;
         }
     }
 
+    /// <summary>Fecha o modal de resultado exibido após o salvamento.</summary>
     public async Task<bool> CloseConfirmationModalAsync()
     {
         if (_page is null) return false;
         try
         {
-            var okBtn = _page.Locator("xpath=/html/body/div[9]/div/div/div[2]/button");
-            await okBtn.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 30000 });
-            await okBtn.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 300000 });
+            var button = _page.Locator(SsgSelectors.BootboxPrimary).First;
+            await button.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 30000 });
+            var message = await ReadModalMessageAsync();
+            if (!string.IsNullOrWhiteSpace(message)) _log($"💬 SSG: {message}");
+            await button.ClickAsync();
             await _page.WaitForTimeoutAsync(500);
             return true;
         }
         catch (Exception ex)
         {
-            _log($"Modal de confirmação não detectado: {ex.Message}");
+            V($"CloseConfirmationModalAsync: {ex.Message}");
             return false;
         }
     }
+
+    private async Task<string?> ReadModalMessageAsync()
+    {
+        if (_page is null) return null;
+        try
+        {
+            var body = _page.Locator(".bootbox .modal-body, div.modal.in .modal-body").First;
+            if (await body.CountAsync() == 0) return null;
+            var text = (await body.InnerTextAsync() ?? string.Empty).Trim();
+            return string.IsNullOrWhiteSpace(text) ? null : text.Replace('\n', ' ');
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Fecha qualquer modal aberto (avisos de validação, "Listagem de Itens", sucesso).
+    /// Necessário porque um modal esquecido mantém o <c>.modal-backdrop</c> ativo e todos
+    /// os cliques seguintes falham por timeout.
+    /// </summary>
+    private async Task DismissModalsAsync()
+    {
+        if (_page is null) return;
+        for (var i = 0; i < 6; i++)
+        {
+            try
+            {
+                var modal = _page.Locator(SsgSelectors.AnyVisibleModal).First;
+                if (await modal.CountAsync() == 0 || !await modal.IsVisibleAsync()) return;
+
+                var message = await ReadModalMessageAsync();
+                if (!string.IsNullOrWhiteSpace(message))
+                    V($"   fechando modal: {message[..Math.Min(120, message.Length)]}");
+
+                var button = modal.Locator(SsgSelectors.ModalCloseButtons).First;
+                if (await button.CountAsync() > 0)
+                    await button.ClickAsync(new() { Timeout = 5000 });
+                else
+                    await _page.Keyboard.PressAsync("Escape");
+
+                await modal.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 5000 });
+            }
+            catch { return; }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Utilidades
+    // ------------------------------------------------------------------
+
+    private static bool IsTime(string value)
+        => !string.IsNullOrWhiteSpace(value) && Regex.IsMatch(value, @"^([01]?\d|2[0-3]):[0-5]\d$");
 
     private static string FormatTime(string time)
     {
@@ -1165,8 +951,7 @@ public sealed class SsgAutomation : IAsyncDisposable
     }
 
     /// <summary>
-    /// Normaliza datas para DD/MM/YYYY. Aceita entradas como '20/5/2025', '20-05-2025'
-    /// ou '2025-05-20' e devolve sempre com dígitos completos.
+    /// Normaliza datas para DD/MM/YYYY. Aceita '20/5/2025', '20-05-2025' ou '2025-05-20'.
     /// </summary>
     private static string FormatDate(string date)
     {
@@ -1176,7 +961,6 @@ public sealed class SsgAutomation : IAsyncDisposable
         if (parts.Length != 3) return date;
 
         int d, m, y;
-        // Caso ISO yyyy/MM/dd
         if (parts[0].Length == 4 && int.TryParse(parts[0], out var yIso)
             && int.TryParse(parts[1], out var mIso) && int.TryParse(parts[2], out var dIso))
         {
@@ -1184,7 +968,7 @@ public sealed class SsgAutomation : IAsyncDisposable
         }
         else if (int.TryParse(parts[0], out d) && int.TryParse(parts[1], out m) && int.TryParse(parts[2], out y))
         {
-            if (y < 100) y += 2000; // ano com 2 dígitos
+            if (y < 100) y += 2000;
         }
         else
         {
@@ -1234,10 +1018,8 @@ public sealed class SsgAutomation : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Intencional: NÃO fechamos o navegador nem o contexto ao final do processo.
-        // O usuário pediu para manter o Chrome aberto após a execução, permitindo
-        // revisar/conferir os apontamentos antes de fechar manualmente.
-        // Apenas liberamos os recursos do Playwright (cliente) sem encerrar o browser.
+        // Intencional: o navegador NÃO é fechado ao final da execução, permitindo que o
+        // usuário revise os apontamentos. Também não encerramos um Chrome reutilizado.
         await Task.CompletedTask;
         _playwright?.Dispose();
     }

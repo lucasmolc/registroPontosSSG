@@ -215,50 +215,23 @@ public sealed partial class MainViewModel : ObservableObject
             }
             AddLog("✅ Login OK");
 
-            await automation.SelectMonthAndFilterAsync(period);
+            if (!await automation.SelectMonthAndFilterAsync(period))
+            {
+                AddLog("❌ Falha ao filtrar o período no SSG");
+                return;
+            }
+
             await automation.GetRegisteredDatesAsync();
             AddLog($"🔍 {automation.RegisteredDates.Count} data(s) já cadastrada(s)");
 
-            // Corrige registros já cadastrados que estejam com indicador de erro (thumbs-down)
-            AddLog("🔧 Verificando registros existentes com erros...");
-            var fixedCount = await automation.FixFlaggedExistingRecordsAsync();
-            if (fixedCount > 0)
-                AddLog($"🔧 {fixedCount} registro(s) existente(s) corrigido(s)");
-            else
-                AddLog("✓ Nenhum registro existente precisa de correção");
+            // Datas do arquivo que não têm card disponível no período (fora do filtro,
+            // bloqueadas ou inválidas) — avisamos antes de tentar registrar.
+            var unavailable = await automation.GetUnavailableDatesAsync(records.Select(r => r.Date));
+            foreach (var date in unavailable)
+                AddLog($"⛔ {date}: dia indisponível para lançamento no SSG");
 
             int ok = 0, skip = 0, fail = 0;
 
-            // 1ª passagem: marca em lote todas as datas parciais para exclusão
-            //    (e separa quais serão re-cadastradas depois). Assim chamamos o X
-            //    do header e os modais ('Tem certeza?' + N×'Perfeito!') apenas uma vez.
-            var toReregister = new List<PunchRecord>();
-            for (var i = 0; i < records.Count; i++)
-            {
-                var rec = records[i];
-                if (Config.Automation.IgnoreExistingDates && automation.IsDateRegistered(rec.Date))
-                {
-                    var marked = await automation.MarkPartialDateForDeletionAsync(rec);
-                    if (marked)
-                    {
-                        AddLog($"🗑️  {rec.Date} marcado para exclusão (parcial → será recadastrado)");
-                        toReregister.Add(rec);
-                    }
-                }
-            }
-
-            if (automation.PendingDeletions.Count > 0)
-            {
-                AddLog($"🧹 Executando exclusão em lote de {automation.PendingDeletions.Count} dia(s)...");
-                var batchOk = await automation.ExecutePendingDeletionsAsync();
-                if (!batchOk)
-                {
-                    AddLog("❌ Falha na exclusão em lote — abortando para evitar inconsistências");
-                    return;
-                }
-            }
-
-            // 2ª passagem: registra cada apontamento normalmente
             for (var i = 0; i < records.Count; i++)
             {
                 var rec = records[i];
@@ -287,12 +260,15 @@ public sealed partial class MainViewModel : ObservableObject
 
             if (ok > 0)
             {
-                AddLog("💾 Confirmando apontamentos...");
+                AddLog("💾 Salvando dias alterados...");
                 if (await automation.ConfirmEntriesAsync())
                 {
-                    AddLog("✅ Apontamentos salvos!");
-                    AddLog("⏳ Clique em OK no modal do navegador...");
                     await automation.CloseConfirmationModalAsync();
+                    AddLog("✅ Apontamentos salvos!");
+                }
+                else
+                {
+                    AddLog("❌ Falha ao salvar — revise os dados no navegador");
                 }
             }
 

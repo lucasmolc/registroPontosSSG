@@ -51,5 +51,11 @@ public sealed class AutomationConfig
 public sealed class SsgUrls
 {
     public string BaseUrl { get; set; } = "https://ssg.sysmap.com.br";
-    public string TimesheetUrl { get; set; } = "https://ssg.sysmap.com.br/new/timesheet/timesheetrecording.asp";
+
+    /// <summary>
+    /// Tela "Registros de Entrada/Saída e Apontamento" da SPA do SSG.
+    /// A página antiga (<c>/new/timesheet/timesheetrecording.asp</c>) apenas redireciona
+    /// para esta rota, por isso navegamos direto para o hash.
+    /// </summary>
+    public string AccessEntryUrl { get; set; } = "https://ssg.sysmap.com.br/index.html#/access-entry/get-list";
 }

@@ -1,9 +1,8 @@
 # Registro Automático de Pontos SSG — Desktop
 
 Aplicativo Windows nativo (.NET + WPF) que automatiza o registro de pontos no
-sistema SSG da Sysmap. Substitui o projeto Python `c:\Projects\registroPontosSSG`
-por um único `.exe` distribuível, sem necessidade de instalar Python ou
-dependências na máquina do usuário final.
+sistema SSG da Sysmap. Distribuído como um único `.exe` self-contained, sem
+necessidade de instalar runtime ou dependências na máquina do usuário final.
 
 ## Para usuários finais (colegas de trabalho)
 
@@ -13,7 +12,7 @@ dependências na máquina do usuário final.
 4. Preencha as abas (Credenciais → Arquivo → Regras → Executar)
 5. Clique em **🚀 Executar registro**
 
-Sem instalação. Sem Python. Sem editar YAML.
+Sem instalação. Sem runtime. Sem editar arquivos de configuração à mão.
 
 Veja [`docs/LEIA-ME.txt`](docs/LEIA-ME.txt) — instruções 1-página para distribuição.
 
@@ -83,14 +82,18 @@ Senha e secret TOTP são criptografadas via Windows DPAPI no escopo
 
 ### Origem do projeto
 
-Porte fiel do projeto Python `c:\Projects\registroPontosSSG`. Os fluxos
-preservados incluem:
+Esta é a única implementação mantida. Ela nasceu como porte de um protótipo em
+Python (removido do repositório para evitar manutenção duplicada) e cobre:
 
-- Login + 2FA TOTP automático (`config/credenciais.py`, `automacao_ssg.py`)
-- Detecção de planilhas exportadas pelo próprio SSG (`leitor_planilha.py`)
-- Validações e ajustes de horário (`validador_horarios.py` → `TimeValidator.cs`)
-- Filtro de mês atual/passado e detecção de datas já registradas
-- Confirmação final dos apontamentos com modal de OSI/projeto
+- Login + 2FA TOTP automático (`SsgAutomation.LoginAsync`)
+- Detecção de planilhas exportadas pelo próprio SSG (`PunchFileReader`)
+- Validações e ajustes de horário (`TimeValidator`)
+- Filtro de mês atual/anterior e detecção de datas já registradas
+- Preenchimento dos cards de dia e seleção de OSI/Projeto/Atividade
+
+Os seletores da SPA do SSG estão centralizados em `SsgSelectors.cs`; a tabela
+de referência e as armadilhas conhecidas (campos mascarados, preset de período
+obrigatório) estão documentadas no [README raiz](../README.md).
 
 ## Licença
 

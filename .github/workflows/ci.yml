@@ -30,6 +30,9 @@ jobs:
       - name: Compilar (Release)
         run: dotnet build --configuration Release --no-restore
 
+      - name: Rodar testes
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
       - name: Publicar .exe self-contained
         run: >
           dotnet publish src/RegistroPontosSSG.Desktop/RegistroPontosSSG.Desktop.csproj

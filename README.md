@@ -46,6 +46,8 @@ registroPontosSSG/
 │       ├── ViewModels/                  # MainViewModel
 │       ├── Views/                       # Wizard de 2FA, log verboso
 │       └── app.manifest                 # DPI awareness e nível de privilégio
+├── tests/
+│   └── RegistroPontosSSG.Core.Tests/    # xUnit: leitura de planilhas e regras de horário
 └── docs/
     ├── desenvolvimento.md               # Stack, build, publicação, dados do usuário
     ├── design-system.md                 # Tokens visuais e componentes
@@ -135,16 +137,33 @@ Dois detalhes que quebram a automação se ignorados:
 - O filtro **exige o preset de período**: digitar as datas nos campos mascarados faz o Angular
   responder "O campo Período é de preenchimento obrigatório".
 
+## Testes
+
+```powershell
+dotnet test
+```
+
+20 testes em xUnit cobrindo `PunchFileReader` (relatório do SSG e planilha padrão) e
+`TimeValidator` (regras de ajuste). As planilhas de fixture são geradas em código com
+ClosedXML — o `.gitignore` bloqueia `*.xlsx` justamente para impedir o commit de
+arquivos de ponto pessoais.
+
+Sete desses testes existem porque falharam de verdade: eles reproduzem o relatório do
+SSG não sendo reconhecido (cabeçalho na linha 6, fora da janela de varredura) e a
+coluna `saida` sendo confundida com `saida_almoco` no formato padrão.
+
 ## Integração contínua
 
 Dois workflows do GitHub Actions, ambos em runner Windows (obrigatório: o projeto é WPF):
 
 | Workflow | Quando roda | O que faz |
 | -------- | ----------- | --------- |
-| [`ci.yml`](.github/workflows/ci.yml) | push e PR para `master`, ou manualmente | `restore` + `build -c Release`, publica o `.exe` self-contained e anexa como artefato (retido por 14 dias) |
-| [`release.yml`](.github/workflows/release.yml) | push de tag `v*`, ou manualmente informando uma tag | publica o `.exe` e cria a GitHub Release com ele anexado e notas geradas automaticamente |
+| [`ci.yml`](.github/workflows/ci.yml) | push e PR para `master`, ou manualmente | `restore`, `build -c Release`, `dotnet test`, publica o `.exe` self-contained e anexa como artefato (retido por 14 dias) |
+| [`release.yml`](.github/workflows/release.yml) | push de tag `v*`, ou manualmente informando uma tag | `build`, `dotnet test`, publica o `.exe` e cria a GitHub Release com ele anexado e notas geradas automaticamente |
 
-Ambos validam o tamanho do executável (~100 MB): abaixo de 50 MB significa que o
+Os testes rodam nos dois workflows: uma tag não passa pelo `ci.yml` (que só dispara em
+branches), então o `release.yml` executa a suíte antes de publicar. Ambos também validam
+o tamanho do executável (~100 MB): abaixo de 50 MB significa que o
 publish saiu framework-dependent por engano e o `.exe` não rodaria na máquina do
 usuário final.
 

@@ -12,7 +12,6 @@ Aplicativo Windows nativo em **.NET 10 + WPF**, distribuído como `.exe` único 
 ## Início rápido
 
 ```powershell
-cd dotnet
 dotnet build
 dotnet run --project src\RegistroPontosSSG.Desktop
 ```
@@ -20,13 +19,39 @@ dotnet run --project src\RegistroPontosSSG.Desktop
 Publicar `.exe` único:
 
 ```powershell
-cd dotnet
 dotnet publish src\RegistroPontosSSG.Desktop\RegistroPontosSSG.Desktop.csproj `
     -c Release -r win-x64 --self-contained true -o publish
 ```
 
 Documentação detalhada (design system, arquitetura MVVM, DPAPI, distribuição) em
-[`dotnet/README.md`](./dotnet/README.md) e [`dotnet/docs/design-system.md`](./dotnet/docs/design-system.md).
+[`docs/desenvolvimento.md`](./docs/desenvolvimento.md) e [`docs/design-system.md`](./docs/design-system.md).
+
+## Estrutura do repositório
+
+```
+registroPontosSSG/
+├── RegistroPontosSSG.sln
+├── src/
+│   ├── RegistroPontosSSG.Core/          # Lógica reutilizável, sem UI
+│   │   ├── Automation/                  # SsgAutomation + SsgSelectors (Playwright)
+│   │   ├── Configuration/               # ConfigService (%APPDATA%)
+│   │   ├── Models/                      # AppConfig, PunchRecord, ValidationRules
+│   │   ├── Reading/                     # PunchFileReader (Excel/CSV/relatório SSG)
+│   │   ├── Security/                    # DPAPI, TOTP, leitura de QR code
+│   │   └── Validation/                  # TimeValidator (ajustes de horário)
+│   └── RegistroPontosSSG.Desktop/       # Aplicação WPF
+│       ├── Assets/                      # Ícone do aplicativo
+│       ├── ViewModels/                  # MainViewModel
+│       ├── Views/                       # Wizard de 2FA, log verboso
+│       └── app.manifest                 # DPI awareness e nível de privilégio
+└── docs/
+    ├── desenvolvimento.md               # Stack, build, publicação, dados do usuário
+    ├── design-system.md                 # Tokens visuais e componentes
+    └── LEIA-ME.txt                      # Instruções de 1 página para o usuário final
+```
+
+Diretórios gerados em tempo de execução ou build (`bin/`, `obj/`, `publish/`, `logs/`,
+`browser_data/`) não são versionados.
 
 ## Funcionalidades
 
@@ -80,7 +105,7 @@ O SSG migrou de páginas ASP clássicas para uma SPA AngularJS. A tela antiga
 renderizados** — não é preciso criar linha nem digitar a data.
 
 Os seletores usados pela automação estão centralizados em
-[`SsgSelectors.cs`](./dotnet/src/RegistroPontosSSG.Core/Automation/SsgSelectors.cs):
+[`SsgSelectors.cs`](./src/RegistroPontosSSG.Core/Automation/SsgSelectors.cs):
 
 | Elemento | Seletor |
 | -------- | ------- |

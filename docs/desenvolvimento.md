@@ -14,7 +14,7 @@ necessidade de instalar runtime ou dependências na máquina do usuário final.
 
 Sem instalação. Sem runtime. Sem editar arquivos de configuração à mão.
 
-Veja [`docs/LEIA-ME.txt`](docs/LEIA-ME.txt) — instruções 1-página para distribuição.
+Veja [`LEIA-ME.txt`](LEIA-ME.txt) — instruções 1-página para distribuição.
 
 ## Para desenvolvedores
 
@@ -30,28 +30,21 @@ Veja [`docs/LEIA-ME.txt`](docs/LEIA-ME.txt) — instruções 1-página para dist
 
 ### Estrutura
 
-```
-RegistroPontosSSGDesktop/
-├── RegistroPontosSSG.sln
-└── src/
-    ├── RegistroPontosSSG.Core/           # Lógica reutilizável (sem UI)
-    │   ├── Models/                       # AppConfig, PunchRecord, ValidationRules
-    │   ├── Security/                     # DPAPI, TOTP, QR
-    │   ├── Configuration/                # ConfigService (carrega/salva %APPDATA%)
-    │   ├── Reading/                      # PunchFileReader (Excel/CSV/SSG report)
-    │   ├── Validation/                   # TimeValidator (ajustes de horário)
-    │   └── Automation/                   # SsgAutomation (Playwright)
-    └── RegistroPontosSSG.Desktop/        # Aplicação WPF
-        ├── App.xaml + App.xaml.cs        # Resources, tema, exception handler
-        ├── MainWindow.xaml + .cs         # 4 abas (Credenciais/Arquivo/Regras/Executar)
-        ├── Views/TotpWizardWindow.xaml   # Wizard de configuração 2FA
-        └── ViewModels/MainViewModel.cs   # Estado e comandos
-```
+A árvore completa do repositório está no [README raiz](../README.md#estrutura-do-repositório).
+Resumo dos projetos:
+
+| Projeto | Papel |
+| ------- | ----- |
+| `src/RegistroPontosSSG.Core` | Lógica reutilizável, sem UI: automação Playwright, leitura de planilhas, validação de horários, DPAPI e TOTP |
+| `src/RegistroPontosSSG.Desktop` | Aplicação WPF: `MainWindow` com 4 abas (Credenciais/Arquivo/Regras/Executar), wizard de 2FA e janela de log verboso |
+
+Os seletores da SPA do SSG ficam isolados em
+`src/RegistroPontosSSG.Core/Automation/SsgSelectors.cs` — mudanças na interface do SSG
+devem começar por lá.
 
 ### Build local
 
 ```powershell
-cd c:\Projects\RegistroPontosSSGDesktop
 dotnet build
 dotnet run --project src\RegistroPontosSSG.Desktop
 ```
@@ -97,4 +90,4 @@ obrigatório) estão documentadas no [README raiz](../README.md).
 
 ## Licença
 
-MIT — veja [`LICENSE`](LICENSE).
+MIT — veja [`LICENSE`](../LICENSE).

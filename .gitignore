@@ -33,11 +33,10 @@ data/pontos/
 *.pdb
 *.exe.config
 # app.manifest é fonte do projeto Desktop e precisa ser versionado
-!dotnet/src/**/app.manifest
+!src/**/app.manifest
 
 # Distribuição
 dist/
-dist-dotnet/
 *.zip
 
 # ===========================================

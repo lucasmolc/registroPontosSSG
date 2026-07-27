@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:RegistroPontosSSG.Desktop.ViewModels"
         Title="Registro Automático de Pontos SSG"
+        Icon="Assets/logo.ico"
         Height="760" Width="1080" MinHeight="600" MinWidth="900"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource Bg}"

@@ -110,6 +110,22 @@ public sealed partial class MainViewModel : ObservableObject
             foreach (var rec in reader.Read(FilePath))
                 Records.Add(rec);
             Status = $"{Records.Count} registro(s) carregado(s)";
+
+            // Um arquivo em formato inesperado produzia zero registros sem qualquer
+            // aviso, e a execução seguia como se não houvesse nada a lançar.
+            if (Records.Count == 0)
+            {
+                MessageBox.Show(
+                    "Nenhum registro de ponto foi reconhecido neste arquivo.\n\n" +
+                    "Formatos aceitos:\n" +
+                    "  • Relatório exportado do SSG (Time Sheet Report)\n" +
+                    "  • Planilha com as colunas: data, entrada, saida_almoco, " +
+                    "retorno_almoco, saida\n\n" +
+                    "Verifique se a primeira aba do arquivo contém os dados.",
+                    "Nenhum registro reconhecido",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
         catch (Exception ex)
         {

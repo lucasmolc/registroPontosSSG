@@ -1,4 +1,5 @@
-using System.Globalization;
+﻿using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
 using RegistroPontosSSG.Core.Models;
@@ -61,79 +62,116 @@ public sealed class PunchFileReader
         return IsSsgReport(rows) ? ParseSsgReport(rows) : ParseStandard(rows);
     }
 
+    /// <summary>
+    /// Quantas linhas iniciais são inspecionadas em busca do cabeçalho. O relatório
+    /// exportado pelo SSG traz 6 linhas de preâmbulo (título, empresa, período,
+    /// mês) antes do cabeçalho, então uma janela pequena não encontra nada e o
+    /// arquivo era lido como vazio.
+    /// </summary>
+    private const int HeaderScanRows = 25;
+
+    /// <summary>
+    /// Detecta o relatório exportado pelo SSG por marcadores inequívocos: o título
+    /// "TIME SHEET REPORT" ou uma linha de data no formato "Wed, 01/07/26".
+    /// Não basta a célula conter "Date" nem "Punch in": planilhas padrão também têm
+    /// essas colunas e seriam roteadas para o parser errado.
+    /// </summary>
     private static bool IsSsgReport(List<string?[]> rows)
     {
-        for (var i = 0; i < Math.Min(5, rows.Count); i++)
+        var limite = Math.Min(HeaderScanRows, rows.Count);
+        for (var i = 0; i < limite; i++)
         {
-            for (var j = 0; j < Math.Min(3, rows[i].Length); j++)
-            {
-                var v = rows[i][j] ?? string.Empty;
-                if (v.Contains("Punch in", StringComparison.OrdinalIgnoreCase)
-                    || v.Contains("Date", StringComparison.OrdinalIgnoreCase)
-                    || SsgDateRegex.IsMatch(v))
+            var linhaToda = string.Join(" ", rows[i].Select(v => v ?? string.Empty));
+
+            if (linhaToda.Contains("TIME SHEET REPORT", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            foreach (var celula in rows[i])
+                if (SsgDateRegex.IsMatch(celula ?? string.Empty))
                     return true;
-            }
         }
         return false;
     }
 
+    /// <summary>
+    /// Interpreta o relatório do SSG. Cada dia começa numa linha com a data
+    /// ("Wed, 01/07/26") e os pares Entrada/Saída seguintes vêm em linhas sem data:
+    ///
+    ///   Wed, 01/07/26 | 09:56 | 12:14 | ...
+    ///                 | 12:53 | 17:32
+    ///
+    /// Dias sem marcação trazem "--:--" ou "No time punches registered!" e são ignorados.
+    /// </summary>
     private static List<PunchRecord> ParseSsgReport(List<string?[]> rows)
     {
         var records = new List<PunchRecord>();
-        var i = 0;
-        while (i < rows.Count)
-        {
-            var col0 = rows[i].Length > 0 ? rows[i][0] ?? string.Empty : string.Empty;
-            var match = SsgDateRegex.Match(col0);
 
-            if (!match.Success) { i++; continue; }
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var match = SsgDateRegex.Match(GetCol(rows[i], 0) ?? string.Empty);
+            if (!match.Success) continue;
 
             var dateStr = match.Groups[2].Value; // dd/MM/yy
-            string formattedDate = DateTime.TryParseExact(dateStr, "dd/MM/yy",
+            var formattedDate = DateTime.TryParseExact(dateStr, "dd/MM/yy",
                 CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
                 ? d.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)
                 : dateStr;
 
-            var in1 = ExtractTime(GetCol(rows[i], 1));
-            var out1 = ExtractTime(GetCol(rows[i], 2));
-            if (string.IsNullOrEmpty(in1)) { i++; continue; }
-
-            string? in2 = null, out2 = null;
-            if (i + 1 < rows.Count)
+            // Coleta os pares da linha da data e de TODAS as linhas de continuação
+            // (dias com 3+ marcações têm mais de uma linha extra).
+            var pares = new List<(string Entrada, string Saida)>();
+            var emAberto = new List<string>();
+            void ColetarPar(string?[] linha)
             {
-                var nextCol0 = GetCol(rows[i + 1], 0);
-                if (!SsgDateRegex.IsMatch(nextCol0 ?? string.Empty))
+                var entrada = ExtractTime(GetCol(linha, 1));
+                var saida = ExtractTime(GetCol(linha, 2));
+                if (!string.IsNullOrEmpty(entrada) && !string.IsNullOrEmpty(saida))
+                    pares.Add((entrada!, saida!));
+                else if (!string.IsNullOrEmpty(entrada))
+                    emAberto.Add(entrada!); // batida sem saída (turno em andamento)
+            }
+
+            ColetarPar(rows[i]);
+            var j = i + 1;
+            while (j < rows.Count && !SsgDateRegex.IsMatch(GetCol(rows[j], 0) ?? string.Empty))
+            {
+                ColetarPar(rows[j]);
+                j++;
+            }
+
+            if (pares.Count == 0) continue; // dia sem marcação
+
+            // PunchRecord representa no máximo dois pares; o excedente e as batidas
+            // sem saída vão para a observação, para não desaparecerem silenciosamente.
+            var avisos = new List<string>();
+            if (pares.Count > 2)
+                avisos.Add("pares adicionais nao importados: " +
+                    string.Join(", ", pares.Skip(2).Select(p => $"{p.Entrada}-{p.Saida}")));
+            if (emAberto.Count > 0)
+                avisos.Add("batida sem saida ignorada: " + string.Join(", ", emAberto));
+            var observacao = string.Join(" | ", avisos);
+
+            var record = pares.Count >= 2
+                ? new PunchRecord
                 {
-                    in2 = ExtractTime(GetCol(rows[i + 1], 1));
-                    out2 = ExtractTime(GetCol(rows[i + 1], 2));
+                    Date = formattedDate,
+                    Entry = pares[0].Entrada,
+                    LunchOut = pares[0].Saida,
+                    LunchReturn = pares[1].Entrada,
+                    Exit = pares[1].Saida,
+                    Notes = observacao
                 }
-            }
-
-            PunchRecord record;
-            if (!string.IsNullOrEmpty(in2) && !string.IsNullOrEmpty(out2))
-            {
-                record = new PunchRecord
+                : new PunchRecord
                 {
                     Date = formattedDate,
-                    Entry = in1!,
-                    LunchOut = out1!,
-                    LunchReturn = in2!,
-                    Exit = out2!
+                    Entry = pares[0].Entrada,
+                    Exit = pares[0].Saida,
+                    Notes = observacao
                 };
-            }
-            else
-            {
-                record = new PunchRecord
-                {
-                    Date = formattedDate,
-                    Entry = in1!,
-                    Exit = out1 ?? string.Empty
-                };
-            }
 
             if (record.IsValid()) records.Add(record);
-            i++;
         }
+
         return records;
     }
 
@@ -141,7 +179,7 @@ public sealed class PunchFileReader
     {
         var records = new List<PunchRecord>();
         var headerRow = -1;
-        for (var i = 0; i < Math.Min(5, rows.Count); i++)
+        for (var i = 0; i < Math.Min(HeaderScanRows, rows.Count); i++)
         {
             var values = rows[i].Select(v => (v ?? string.Empty).ToLowerInvariant()).ToArray();
             if (values.Any(v => v.Contains("data") || v.Contains("date") || v.Contains("dia")))
@@ -152,19 +190,33 @@ public sealed class PunchFileReader
         }
         if (headerRow < 0) return records;
 
-        var headers = rows[headerRow].Select(h => (h ?? string.Empty).Trim().ToLowerInvariant()).ToArray();
+        var headers = rows[headerRow].Select(h => NormalizeHeader(h)).ToArray();
+
+        // Uma coluna só pode ser atribuída a um campo. Sem isso, a busca por "saida"
+        // casaria com "saida_almoco" (substring) e o horário de saída do dia era perdido.
+        var usados = new HashSet<int>();
         int Idx(params string[] candidates)
         {
+            // 1ª passada: nome exato (evita que "saida" case com "saida almoco")
             for (var k = 0; k < headers.Length; k++)
-                foreach (var c in candidates)
-                    if (headers[k].Contains(c)) return k;
+            {
+                if (usados.Contains(k) || headers[k].Length == 0) continue;
+                if (candidates.Any(c => headers[k] == c)) { usados.Add(k); return k; }
+            }
+            // 2ª passada: substring, para cabeçalhos como "data do apontamento"
+            for (var k = 0; k < headers.Length; k++)
+            {
+                if (usados.Contains(k) || headers[k].Length == 0) continue;
+                if (candidates.Any(c => headers[k].Contains(c))) { usados.Add(k); return k; }
+            }
             return -1;
         }
 
+        // Ordem importa: os nomes compostos são resolvidos antes dos simples.
         var iDate = Idx("data", "date", "dia");
+        var iLunchOut = Idx("saida almoco", "almoco saida", "saida para almoco", "inicio almoco");
+        var iLunchRet = Idx("retorno almoco", "almoco retorno", "volta almoco", "fim almoco");
         var iEntry = Idx("entrada", "entry", "punch in", "inicio");
-        var iLunchOut = Idx("saida_almoco", "saida almoco", "almoco_saida");
-        var iLunchRet = Idx("retorno_almoco", "retorno almoco", "almoco_retorno");
         var iExit = Idx("saida", "exit", "fim", "punch out");
         var iNotes = Idx("observacao", "obs", "observation", "nota");
 
@@ -187,6 +239,25 @@ public sealed class PunchFileReader
         }
 
         return records;
+    }
+
+    /// <summary>
+    /// Normaliza um cabeçalho para comparação: minúsculas, sem acentos, com '_' e
+    /// espaços múltiplos reduzidos a um espaço simples. Assim "Saída_Almoço",
+    /// "saida almoco" e "SAIDA_ALMOCO" viram a mesma chave.
+    /// </summary>
+    private static string NormalizeHeader(string? header)
+    {
+        if (string.IsNullOrWhiteSpace(header)) return string.Empty;
+
+        var decomposto = header.Trim().ToLowerInvariant().Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(decomposto.Length);
+        foreach (var ch in decomposto)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.NonSpacingMark) continue;
+            sb.Append(ch == '_' || ch == '-' ? ' ' : ch);
+        }
+        return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
     }
 
     private static string? GetCol(string?[] row, int idx)

@@ -1,0 +1,59 @@
+name: CI
+
+# Compila a solução e gera o .exe self-contained em cada push/PR.
+# Precisa de runner Windows: o projeto é WPF (net10.0-windows).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build e publicação do .exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restaurar dependências
+        run: dotnet restore
+
+      - name: Compilar (Release)
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Publicar .exe self-contained
+        run: >
+          dotnet publish src/RegistroPontosSSG.Desktop/RegistroPontosSSG.Desktop.csproj
+          -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Conferir o executável gerado
+        shell: pwsh
+        run: |
+          $exe = 'publish/RegistroPontosSSG.exe'
+          if (-not (Test-Path $exe)) {
+            throw "publish/RegistroPontosSSG.exe nao foi gerado"
+          }
+          $tamanho = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "RegistroPontosSSG.exe gerado: $tamanho MB"
+          # O single-file precisa embutir o driver do Playwright; abaixo de ~50 MB
+          # é sinal de que o publish saiu framework-dependent por engano.
+          if ($tamanho -lt 50) {
+            throw "executavel com $tamanho MB - esperado ~100 MB (self-contained)"
+          }
+
+      - name: Anexar .exe como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: RegistroPontosSSG-exe
+          path: publish/RegistroPontosSSG.exe
+          retention-days: 14
+          if-no-files-found: error

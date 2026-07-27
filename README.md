@@ -1,5 +1,7 @@
 # Sistema de Registro Automático de Pontos SSG
 
+[![CI](https://github.com/lucasmolc/registroPontosSSG/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasmolc/registroPontosSSG/actions/workflows/ci.yml)
+
 Automação para leitura de arquivos de pontos (Excel/CSV) e registro automático no sistema SSG da Sysmap.
 
 Aplicativo Windows nativo em **.NET 10 + WPF**, distribuído como `.exe` único self-contained
@@ -132,6 +134,26 @@ Dois detalhes que quebram a automação se ignorados:
   apenas os 4 dígitos e deixar a máscara aplicar o `:`.
 - O filtro **exige o preset de período**: digitar as datas nos campos mascarados faz o Angular
   responder "O campo Período é de preenchimento obrigatório".
+
+## Integração contínua
+
+Dois workflows do GitHub Actions, ambos em runner Windows (obrigatório: o projeto é WPF):
+
+| Workflow | Quando roda | O que faz |
+| -------- | ----------- | --------- |
+| [`ci.yml`](.github/workflows/ci.yml) | push e PR para `master`, ou manualmente | `restore` + `build -c Release`, publica o `.exe` self-contained e anexa como artefato (retido por 14 dias) |
+| [`release.yml`](.github/workflows/release.yml) | push de tag `v*`, ou manualmente informando uma tag | publica o `.exe` e cria a GitHub Release com ele anexado e notas geradas automaticamente |
+
+Ambos validam o tamanho do executável (~100 MB): abaixo de 50 MB significa que o
+publish saiu framework-dependent por engano e o `.exe` não rodaria na máquina do
+usuário final.
+
+Para publicar uma versão:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ## Regras de validação automática
 

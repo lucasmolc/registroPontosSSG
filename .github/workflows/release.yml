@@ -1,0 +1,62 @@
+name: Release
+
+# Publica o .exe numa GitHub Release quando uma tag "v*" é enviada.
+#   git tag v1.0.0 && git push origin v1.0.0
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag existente a publicar (ex.: v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publicar release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Instalar .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Publicar .exe self-contained
+        run: >
+          dotnet publish src/RegistroPontosSSG.Desktop/RegistroPontosSSG.Desktop.csproj
+          -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Conferir o executável gerado
+        shell: pwsh
+        run: |
+          $exe = 'publish/RegistroPontosSSG.exe'
+          if (-not (Test-Path $exe)) {
+            throw "publish/RegistroPontosSSG.exe nao foi gerado"
+          }
+          $tamanho = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "RegistroPontosSSG.exe gerado: $tamanho MB"
+          if ($tamanho -lt 50) {
+            throw "executavel com $tamanho MB - esperado ~100 MB (self-contained)"
+          }
+
+      - name: Criar a release com o .exe
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = if ('${{ github.event.inputs.tag }}') { '${{ github.event.inputs.tag }}' } else { '${{ github.ref_name }}' }
+          gh release create $tag publish/RegistroPontosSSG.exe `
+            --title "Registro Automático de Pontos SSG $tag" `
+            --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "gh release create falhou" }

@@ -64,3 +64,5 @@ desktop.ini
 # Claude Code
 # ===========================================
 .claude/worktrees/
+# Preferencias locais do Claude Code (nao compartilhadas)
+.claude/settings.local.json

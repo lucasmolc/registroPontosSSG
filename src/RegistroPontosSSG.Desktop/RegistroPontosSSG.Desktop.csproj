@@ -27,6 +27,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ApplicationIcon grava o ícone no Win32 do .exe, mas NÃO disponibiliza o
+         arquivo para o XAML. Sem este Resource, Icon="Assets/logo.ico" na
+         MainWindow lança IOException ("Cannot locate resource") na inicialização. -->
+    <Resource Include="Assets\logo.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="Microsoft.Playwright" Version="1.54.0" />
   </ItemGroup>
